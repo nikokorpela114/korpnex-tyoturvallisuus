@@ -2,21 +2,43 @@ import React, { useState, useEffect, useRef } from 'react'
 import { sb } from './supabaseClient.js'
 import {
   TR_CATEGORIES, MVR_CATEGORIES, TR_LEGAL_NOTE, MVR_LEGAL_NOTE,
-  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, compressImage,
+  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, compressImage, buildReportPDF,
 } from './shared.js'
+import Dashboard from './Dashboard.jsx'
 
 let idCounter = 0
-const DRAFT_KEY = 'korpnex_tt_draft_v1'
+// Jokaisella työmaalla on oma keskeneräinen luonnoksensa tässä kartassa,
+// { [työmaan nimi]: { reportId, obs, trCounts, mvrCounts, trDbId, mvrDbId } }
+// — näin eri työmaiden havainnot eivät voi koskaan sekoittua toisiinsa
+// samalla laitteella, vaikka tarkastaja vaihtaisi työmaata kesken kaiken.
+const DRAFTS_KEY = 'korpnex_tt_drafts_v2'
+const LAST_SITE_KEY = 'korpnex_tt_last_site'
+const INSPECTOR_KEY = 'korpnex_tt_inspector' // sama tarkastaja riippumatta työmaasta
 
 function uuid() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
   return 'r-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10)
 }
 
+function loadDraftsMap() {
+  try {
+    const raw = localStorage.getItem(DRAFTS_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+
 export default function App() {
+  // ?valvomo avaa erillisen kooste-/raportointinäkymän kaikista työmaista.
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('valvomo')) {
+    return <Dashboard />
+  }
+
   const [tab, setTab] = useState('havainnot') // 'havainnot' | 'tr' | 'mvr'
   const [site, setSite] = useState('')
   const [inspector, setInspector] = useState('')
+  const [worksites, setWorksites] = useState([])
+  const [addingSite, setAddingSite] = useState(false)
+  const [newSiteName, setNewSiteName] = useState('')
   const [obs, setObs] = useState([])
   const [trCounts, setTrCounts] = useState(() => emptyCounts(TR_CATEGORIES))
   const [mvrCounts, setMvrCounts] = useState(() => emptyCounts(MVR_CATEGORIES))
@@ -57,37 +79,80 @@ export default function App() {
     syncTimer.current = setTimeout(() => setSyncMsg(''), 3000)
   }
 
+  // Työmaalista Supabasesta (pudotusvalikkoa varten)
+  useEffect(() => {
+    sb.from('worksites').select('*').order('name').then(({ data, error }) => {
+      if (!error && data) setWorksites(data)
+    })
+  }, [])
+
+  function applyDraft(siteName, d) {
+    setSite(siteName)
+    reportIdRef.current = d?.reportId || uuid()
+    const restoredObs = d?.obs?.length ? d.obs : []
+    setObs(restoredObs)
+    if (restoredObs.length) idCounter = Math.max(idCounter, ...restoredObs.map(o => o.id || 0))
+    setTrCounts(d?.trCounts || emptyCounts(TR_CATEGORIES))
+    setMvrCounts(d?.mvrCounts || emptyCounts(MVR_CATEGORIES))
+    setTrDbId(d?.trDbId || null)
+    setMvrDbId(d?.mvrDbId || null)
+    if (d) showSync('↺ Luonnos palautettu')
+  }
+
+  // Vaihtaa aktiivisen työmaan: lataa sen oman (mahdollisesti tyhjän)
+  // luonnoksen. Nykyisen työmaan tila on jo tallessa jatkuvasti alla olevan
+  // tallennus-effectin ansiosta, joten mitään ei voi hukata vaihdossa.
+  function selectSite(name) {
+    applyDraft(name, loadDraftsMap()[name])
+  }
+
   // --- Luonnon palautus (selviää suljetusta välilehdestä / offline-ajasta) ---
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(DRAFT_KEY)
-      if (raw) {
-        const d = JSON.parse(raw)
-        if (d.reportId) reportIdRef.current = d.reportId
-        if (d.site) setSite(d.site)
-        if (d.inspector) setInspector(d.inspector)
-        if (d.obs?.length) { setObs(d.obs); idCounter = Math.max(idCounter, ...d.obs.map(o => o.id || 0)) }
-        if (d.trCounts) setTrCounts(d.trCounts)
-        if (d.mvrCounts) setMvrCounts(d.mvrCounts)
-        if (d.trDbId) setTrDbId(d.trDbId)
-        if (d.mvrDbId) setMvrDbId(d.mvrDbId)
-        showSync('↺ Luonnos palautettu')
-      }
+      const lastSite = localStorage.getItem(LAST_SITE_KEY) || ''
+      const savedInspector = localStorage.getItem(INSPECTOR_KEY) || ''
+      if (savedInspector) setInspector(savedInspector)
+      if (lastSite) applyDraft(lastSite, loadDraftsMap()[lastSite])
     } catch {}
     restoredRef.current = true
   }, [])
 
+  // Tallentaa AINA nykyisen työmaan omaan kohtaansa kartassa — muiden
+  // työmaiden luonnokset pysyvät koskemattomina.
   useEffect(() => {
-    if (!restoredRef.current) return
+    if (!restoredRef.current || !site) return
     try {
-      const toSave = {
-        reportId: reportIdRef.current, site, inspector,
+      const map = loadDraftsMap()
+      map[site] = {
+        reportId: reportIdRef.current,
         obs: obs.map(({ _timer, ...rest }) => rest),
         trCounts, mvrCounts, trDbId, mvrDbId,
       }
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(toSave))
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(map))
+      localStorage.setItem(LAST_SITE_KEY, site)
     } catch {}
-  }, [obs, site, inspector, trCounts, mvrCounts, trDbId, mvrDbId])
+  }, [obs, site, trCounts, mvrCounts, trDbId, mvrDbId])
+
+  useEffect(() => {
+    if (!restoredRef.current) return
+    try { localStorage.setItem(INSPECTOR_KEY, inspector) } catch {}
+  }, [inspector])
+
+  async function addWorksite() {
+    const name = newSiteName.trim()
+    if (!name) return
+    const existing = worksites.find(w => w.name.toLowerCase() === name.toLowerCase())
+    if (existing) { selectSite(existing.name); setAddingSite(false); setNewSiteName(''); return }
+    const { data, error } = await sb.from('worksites').insert([{ name }]).select()
+    if (!error && data?.[0]) {
+      setWorksites(prev => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name)))
+      selectSite(data[0].name)
+    } else {
+      console.error('addWorksite failed:', error)
+      showSync('⚠ Työmaan lisäys epäonnistui (tarkista yhteys)')
+    }
+    setAddingSite(false); setNewSiteName('')
+  }
 
   useEffect(() => {
     const goOnline = () => { setIsOnline(true); showSync('🌐 Yhteys palautui, synkronoidaan...'); retrySync() }
@@ -248,162 +313,25 @@ export default function App() {
 
   function newReport() {
     const hasContent = obs.length > 0 || overallIndex(trCounts, TR_CATEGORIES).total > 0 || overallIndex(mvrCounts, MVR_CATEGORIES).total > 0
-    if (hasContent && !window.confirm('Aloitetaanko uusi raportti? Nykyinen sisältö poistetaan tältä laitteelta (jo pilveen tallentunut säilyy Supabasessa ennallaan).')) return
+    if (hasContent && !window.confirm(`Aloitetaanko uusi raportti työmaalle "${site}"? Nykyinen sisältö poistetaan tältä laitteelta (jo pilveen tallentunut säilyy Supabasessa ennallaan).`)) return
     setObs([]); setTrCounts(emptyCounts(TR_CATEGORIES)); setMvrCounts(emptyCounts(MVR_CATEGORIES))
     setTrDbId(null); setMvrDbId(null)
     reportIdRef.current = uuid()
-    try { localStorage.removeItem(DRAFT_KEY) } catch {}
+    // Tallennus-effect kirjoittaa tyhjän tilan tämän työmaan kohtaan
+    // kartassa automaattisesti heti kun obs/trCounts/mvrCounts päivittyvät.
   }
 
   // --- PDF-vienti ---
   async function exportPDF() {
+    if (!site) { alert('Valitse ensin työmaa yläreunasta.'); return }
     const trTotal = overallIndex(trCounts, TR_CATEGORIES).total
     const mvrTotal = overallIndex(mvrCounts, MVR_CATEGORIES).total
     if (obs.length === 0 && !trTotal && !mvrTotal) {
       alert('Ei sisältöä — lisää vähintään yksi havainto tai tee TR-/MVR-mittaus ennen PDF:n luontia.')
       return
     }
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF({ unit: 'mm', format: 'a4' })
-    const W = 210, M = 14, CW = W - M * 2
-    let y = 18
-    const dateStr = new Date().toLocaleDateString('fi-FI')
-
-    const drawHeader = () => {
-      doc.setFillColor(23, 39, 92)
-      doc.rect(0, 0, W, 28, 'F')
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(199, 203, 214)
-      doc.text('KORPNEX', M, 12)
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(255, 255, 255)
-      doc.text('Työturvallisuusraportti', M, 19)
-      doc.setFontSize(9); doc.setTextColor(190, 196, 220)
-      doc.text(dateStr, W - M, 12, { align: 'right' })
-    }
-    drawHeader()
-    y = 38
-
-    const meta = [['Työmaa / kohde', site || '–'], ['Tarkastaja', inspector || '–']]
-    meta.forEach(([k, v]) => {
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(100, 105, 125); doc.text(k, M, y)
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(20, 24, 58); doc.text(v, M + 40, y)
-      y += 6
-    })
-    y += 3; doc.setDrawColor(200, 203, 215); doc.line(M, y, W - M, y); y += 9
-
-    const ensureSpace = (needed) => { if (y + needed > 278) { doc.addPage(); y = 18 } }
-
-    const drawMeasurement = (title, categories, counts, legalNote) => {
-      const { pct, total } = overallIndex(counts, categories)
-      if (!total) return
-      ensureSpace(16)
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
-      doc.text(title, M, y); y += 2
-      const col = pct >= 90 ? [26, 138, 80] : pct >= 75 ? [208, 120, 0] : [214, 48, 48]
-      doc.setFillColor(...col)
-      doc.roundedRect(W - M - 34, y - 7, 34, 11, 1.5, 1.5, 'F')
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(255, 255, 255)
-      doc.text(`${pct} %`, W - M - 17, y + 0.5, { align: 'center' })
-      y += 8
-
-      // Taulukko: luokka | oikein | väärin | %
-      doc.setFillColor(238, 240, 245)
-      doc.rect(M, y, CW, 7, 'F')
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(100, 105, 125)
-      doc.text('Havaintoluokka', M + 2, y + 4.8)
-      doc.text('Oikein', M + CW - 62, y + 4.8, { align: 'right' })
-      doc.text('Väärin', M + CW - 34, y + 4.8, { align: 'right' })
-      doc.text('%', M + CW - 2, y + 4.8, { align: 'right' })
-      y += 7
-      categories.forEach((c, i) => {
-        ensureSpace(8)
-        const cnt = counts[c.key] || { oikein: 0, vaarin: 0 }
-        const cpct = categoryPct(cnt)
-        if (i % 2 === 1) { doc.setFillColor(247, 248, 250); doc.rect(M, y, CW, 7, 'F') }
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(30, 34, 60)
-        doc.text(c.label, M + 2, y + 4.8)
-        doc.setTextColor(26, 138, 80)
-        doc.text(String(cnt.oikein), M + CW - 62, y + 4.8, { align: 'right' })
-        doc.setTextColor(214, 48, 48)
-        doc.text(String(cnt.vaarin), M + CW - 34, y + 4.8, { align: 'right' })
-        doc.setTextColor(60, 64, 90)
-        doc.text(cpct == null ? '–' : `${cpct} %`, M + CW - 2, y + 4.8, { align: 'right' })
-        y += 7
-      })
-      y += 5
-      ensureSpace(10)
-      doc.setFont('helvetica', 'italic'); doc.setFontSize(7.5); doc.setTextColor(140, 144, 160)
-      const lines = doc.splitTextToSize(legalNote, CW)
-      doc.text(lines, M, y); y += lines.length * 3.6 + 8
-    }
-
-    drawMeasurement('TR-mittaus', TR_CATEGORIES, trCounts, TR_LEGAL_NOTE)
-    drawMeasurement('MVR-mittaus', MVR_CATEGORIES, mvrCounts, MVR_LEGAL_NOTE)
-
-    if (obs.length > 0) {
-      ensureSpace(14)
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
-      doc.text('Havainnot', M, y); y += 9
-
-      const sevCol = { Kriittinen: [214, 48, 48], Huomio: [208, 120, 0], Info: [26, 138, 80] }
-      for (let i = 0; i < obs.length; i++) {
-        const o = obs[i]
-        ensureSpace(16)
-        const col = sevCol[o.sev] || [80, 80, 80]
-        doc.setFillColor(...col)
-        doc.roundedRect(M, y, CW, 8, 1.5, 1.5, 'F')
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(255, 255, 255)
-        doc.text(`${i + 1}. ${o.havainto || '(ei kuvausta)'}`, M + 3, y + 5.5)
-        doc.setFontSize(9)
-        doc.text(o.sev, W - M - 3, y + 5.5, { align: 'right' })
-        y += 11
-
-        if (o.yritys) {
-          ensureSpace(6)
-          doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(100, 105, 125)
-          doc.text('Yritys: ', M + 2, y)
-          doc.setFont('helvetica', 'normal'); doc.setTextColor(30, 34, 60)
-          doc.text(o.yritys, M + 18, y)
-          y += 5.5
-        }
-        if (o.createdAt) {
-          doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(150, 154, 170)
-          doc.text(new Date(o.createdAt).toLocaleString('fi-FI', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), M + 2, y)
-          y += 5
-        }
-        if (o.note) {
-          ensureSpace(8)
-          doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(40, 40, 40)
-          const lines = doc.splitTextToSize(o.note, CW - 4)
-          doc.text(lines, M + 2, y); y += lines.length * 5 + 2
-        }
-        for (const photo of o.photos) {
-          const img = new Image(); img.src = photo.src
-          await new Promise(r => { img.onload = r; img.onerror = r })
-          const c = document.createElement('canvas')
-          c.width = img.naturalWidth; c.height = img.naturalHeight
-          c.getContext('2d').drawImage(img, 0, 0)
-          const corrected = c.toDataURL('image/jpeg', 0.85)
-          const nw = img.naturalWidth || 800, nh = img.naturalHeight || 600
-          const sc = Math.min((CW - 4) / nw, 220 / nh)
-          const dw = nw * sc, dh = nh * sc
-          ensureSpace(dh + 4)
-          try { doc.addImage(corrected, 'JPEG', M + 2, y, dw, dh) } catch {}
-          y += dh + 4
-        }
-        y += 3
-      }
-    }
-
-    const tp = doc.getNumberOfPages()
-    for (let p = 1; p <= tp; p++) {
-      doc.setPage(p); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(160, 160, 160)
-      doc.text(`Korpnex Oy · Työturvallisuusraportti · ${dateStr}`, M, 292)
-      doc.text(`${p} / ${tp}`, W - M, 292, { align: 'right' })
-    }
-
-    const blob = doc.output('blob')
-    const fn = `Tyoturvallisuus_${(site || 'kohde').replace(/\s+/g, '_')}_${dateStr.replace(/\./g, '-')}.pdf`
-    setPdfBlob(blob); setPdfName(fn); setPdfDownloaded(false); setPdfMode(true)
+    const { blob, filename } = await buildReportPDF({ site, inspector, trCounts, mvrCounts, obs })
+    setPdfBlob(blob); setPdfName(filename); setPdfDownloaded(false); setPdfMode(true)
   }
 
   const shareSupported = typeof navigator !== 'undefined' && !!navigator.share && !!navigator.canShare
@@ -446,13 +374,44 @@ export default function App() {
 
       {/* Meta */}
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', borderBottom: '1px solid #d3d6e0' }}>
-        <input style={inputStyle} placeholder="Työmaa / kohde" value={site} onChange={e => setSite(e.target.value)} />
+        <div>
+          <div style={labelStyle}>Työmaa</div>
+          {!addingSite ? (
+            <select
+              style={selectStyle}
+              value={site}
+              onChange={e => e.target.value === '__new__' ? (setAddingSite(true), setNewSiteName('')) : selectSite(e.target.value)}
+            >
+              <option value="" disabled>Valitse työmaa…</option>
+              {worksites.map(w => <option key={w.id} value={w.name}>{w.name}</option>)}
+              <option value="__new__">＋ Lisää uusi työmaa…</option>
+            </select>
+          ) : (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input autoFocus style={{ ...inputStyle, flex: 1 }} placeholder="Uuden työmaan nimi"
+                value={newSiteName} onChange={e => setNewSiteName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addWorksite()} />
+              <button onClick={addWorksite} style={{ padding: '0 14px', background: '#17275c', border: 'none', borderRadius: 8, color: '#fff', fontWeight: 700, fontSize: 13 }}>Lisää</button>
+              <button onClick={() => setAddingSite(false)} style={{ padding: '0 12px', background: '#eef0f5', border: '1px solid #d3d6e0', borderRadius: 8, color: '#6a7086', fontSize: 15 }}>✕</button>
+            </div>
+          )}
+        </div>
         <input style={inputStyle} placeholder="Tarkastaja" value={inspector} onChange={e => setInspector(e.target.value)} />
-        <button onClick={newReport} style={{ alignSelf: 'flex-end', background: 'none', border: 'none', fontSize: 11, color: '#6a7086', padding: '2px 0' }}>
-          🔄 Uusi raportti
-        </button>
+        {site && (
+          <button onClick={newReport} style={{ alignSelf: 'flex-end', background: 'none', border: 'none', fontSize: 11, color: '#6a7086', padding: '2px 0' }}>
+            🔄 Uusi raportti tälle työmaalle
+          </button>
+        )}
       </div>
 
+      {!site ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32, background: '#eef0f5' }}>
+          <p style={{ fontSize: 14, color: '#6a7086', textAlign: 'center', lineHeight: 1.6 }}>
+            📍 Valitse tai lisää työmaa yläreunasta<br />aloittaaksesi tarkastuksen.
+          </p>
+        </div>
+      ) : (
+      <>
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 6, padding: '10px 16px 0', background: '#fff' }}>
         {[
@@ -597,6 +556,8 @@ export default function App() {
             )}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   )
