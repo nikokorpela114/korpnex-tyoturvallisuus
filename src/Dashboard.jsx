@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { sb } from './supabaseClient.js'
 import {
   TR_CATEGORIES, MVR_CATEGORIES, TR_LEGAL_NOTE, MVR_LEGAL_NOTE,
-  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, buildReportPDF,
+  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, buildReportPDF, summarizeObservations,
 } from './shared.js'
 
 // Valvomo (?valvomo) — Korpnexin hallintapaneeli, tarkoitettu käytettäväksi
@@ -262,7 +262,7 @@ export default function Dashboard() {
       return
     }
     const pdfObs = activeObs.map(o => ({
-      havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note,
+      havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note, status: o.status,
       createdAt: o.created_at, photos: [],
     }))
     const { blob, filename } = await buildReportPDF({
@@ -401,6 +401,7 @@ export default function Dashboard() {
                   <div className="kx-overview-grid">
                     <MeasurementSummary title="TR-mittaus" categories={TR_CATEGORIES} row={trLatest} />
                     <MeasurementSummary title="MVR-mittaus" categories={MVR_CATEGORIES} row={mvrLatest} />
+                    <WorksiteSummary obs={activeObs} />
                     <div className="kx-card kx-recent-obs">
                       <div className="kx-card-title">Viimeisimmät havainnot</div>
                       {activeObs.length === 0 && <div className="kx-empty-note">Ei havaintoja.</div>}
@@ -502,6 +503,62 @@ function MeasurementSummary({ title, categories, row }) {
             )
           })}
         </div>
+      )}
+    </div>
+  )
+}
+
+// Koko työmaan (kaikkien viikkojen/tarkastuskertojen) kokonaisyhteenveto:
+// kuinka paljon puutteita yhteensä, kuinka moni vielä avoinna, ja erityisesti
+// kuinka ne jakautuvat urakoitsijoittain — juuri tätä tarvitaan kun työmaa on
+// kestänyt monta viikkoa ja havaintoja on kertynyt useasta tarkastuskerrasta.
+// Sama laskenta ja järjestys kuin PDF-raportin "Yhteenveto"-osiossa
+// (ks. shared.js:n summarizeObservations), joten näkymä ja raportti täsmäävät.
+function WorksiteSummary({ obs }) {
+  const summary = summarizeObservations(obs)
+  const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
+  return (
+    <div className="kx-card kx-worksite-summary">
+      <div className="kx-card-title">Työmaan kokonaisyhteenveto (koko historia)</div>
+      {summary.total === 0 ? (
+        <div className="kx-empty-note">Ei havaintoja vielä.</div>
+      ) : (
+        <>
+          <div className="kx-summary-badges">
+            <span className="kx-badge kx-badge-main">Yhteensä {summary.total}</span>
+            <span className="kx-badge" style={{ color: sevColor.Kriittinen }}>Kriittinen {summary.bySev.Kriittinen}</span>
+            <span className="kx-badge" style={{ color: sevColor.Huomio }}>Huomio {summary.bySev.Huomio}</span>
+            <span className="kx-badge" style={{ color: sevColor.Info }}>Info {summary.bySev.Info}</span>
+            <span className="kx-badge" style={{ color: '#d07800' }}>Avoinna {summary.byStatus.avoin}</span>
+            <span className="kx-badge" style={{ color: '#1a8a50' }}>Korjattu {summary.byStatus.korjattu}</span>
+          </div>
+          <div className="kx-table-wrap">
+            <table className="kx-yritys-table">
+              <thead>
+                <tr>
+                  <th>Yritys / urakoitsija</th>
+                  <th>Yht.</th>
+                  <th>Kriittinen</th>
+                  <th>Huomio</th>
+                  <th>Info</th>
+                  <th>Avoinna</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.byYritys.map(row => (
+                  <tr key={row.yritys}>
+                    <td>{row.yritys}</td>
+                    <td>{row.total}</td>
+                    <td style={{ color: sevColor.Kriittinen }}>{row.Kriittinen || ''}</td>
+                    <td style={{ color: sevColor.Huomio }}>{row.Huomio || ''}</td>
+                    <td style={{ color: sevColor.Info }}>{row.Info || ''}</td>
+                    <td style={{ color: row.avoin ? '#d07800' : '#9aa2c0' }}>{row.avoin}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   )
@@ -728,6 +785,17 @@ const DASHBOARD_CSS = `
 
 .kx-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
 .kx-recent-obs { grid-column: 1 / -1; }
+.kx-worksite-summary { grid-column: 1 / -1; }
+.kx-summary-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.kx-badge { font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 20px; background: #f4f5f8; color: #3a3f5c; }
+.kx-badge-main { background: #17275c; color: #fff; }
+.kx-table-wrap { overflow-x: auto; }
+.kx-yritys-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.kx-yritys-table th { text-align: right; font-size: 10.5px; font-weight: 700; color: #6a7086; text-transform: uppercase; letter-spacing: 0.4px; padding: 6px 8px; border-bottom: 1px solid #d3d6e0; white-space: nowrap; }
+.kx-yritys-table th:first-child { text-align: left; }
+.kx-yritys-table td { text-align: right; padding: 8px; border-bottom: 1px solid #eef0f5; color: #14183a; font-weight: 600; white-space: nowrap; }
+.kx-yritys-table td:first-child { text-align: left; font-weight: 700; white-space: normal; }
+.kx-yritys-table tbody tr:last-child td { border-bottom: none; }
 .kx-recent-obs-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #eef0f5; font-size: 13px; }
 .kx-recent-obs-row:last-child { border-bottom: none; }
 .kx-sev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
