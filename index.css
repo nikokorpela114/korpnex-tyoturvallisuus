@@ -1,0 +1,24 @@
+:root {
+  --blue: #17275c;
+  --blue2: #223a8c;
+  --silver: #8b93a8;
+  --silver2: #c7cbd6;
+  --red: #d63030;
+  --green: #1a8a50;
+  --orange: #d07800;
+  --bg: #f4f5f8;
+  --bg2: #ffffff;
+  --bg3: #eef0f5;
+  --border: #d3d6e0;
+  --border2: #b3b8c8;
+  --text: #14183a;
+  --muted: #6a7086;
+  --r: 12px;
+  --rs: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body, #root { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; font-size: 15px; }
+
+button { cursor: pointer; font-family: inherit; }
+input, select, textarea { font-family: inherit; font-size: 14px; }
