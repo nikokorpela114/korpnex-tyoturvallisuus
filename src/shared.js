@@ -69,6 +69,151 @@ export function indexColor(pct) {
 
 export const SEV_LABELS = ['Kriittinen', 'Huomio', 'Info']
 
+// Rakentaa PDF-raportin (TR-/MVR-mittaus + havainnot) samalla ulkoasulla
+// riippumatta siitä kutsutaanko tätä tarkastuksen puhelinnäkymästä (yhden
+// työmaan senhetkinen luonnos, kuvat mukana) vai Valvomosta (pilvestä haettu
+// työmaan koko data useammalta laitteelta koottuna, ei kuvia). Palauttaa
+// { blob, filename }.
+export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs }) {
+  const { jsPDF } = await import('jspdf')
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const W = 210, M = 14, CW = W - M * 2
+  let y = 18
+  const dateStr = new Date().toLocaleDateString('fi-FI')
+
+  doc.setFillColor(23, 39, 92)
+  doc.rect(0, 0, W, 28, 'F')
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(199, 203, 214)
+  doc.text('KORPNEX', M, 12)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(255, 255, 255)
+  doc.text('Työturvallisuusraportti', M, 19)
+  doc.setFontSize(9); doc.setTextColor(190, 196, 220)
+  doc.text(dateStr, W - M, 12, { align: 'right' })
+  y = 38
+
+  const meta = [['Työmaa / kohde', site || '–'], ['Tarkastaja', inspector || '–']]
+  meta.forEach(([k, v]) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(100, 105, 125); doc.text(k, M, y)
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(20, 24, 58); doc.text(v, M + 40, y)
+    y += 6
+  })
+  y += 3; doc.setDrawColor(200, 203, 215); doc.line(M, y, W - M, y); y += 9
+
+  const ensureSpace = (needed) => { if (y + needed > 278) { doc.addPage(); y = 18 } }
+
+  const drawMeasurement = (title, categories, counts, legalNote) => {
+    const { pct, total } = overallIndex(counts, categories)
+    if (!total) return
+    ensureSpace(16)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
+    doc.text(title, M, y); y += 2
+    const col = pct >= 90 ? [26, 138, 80] : pct >= 75 ? [208, 120, 0] : [214, 48, 48]
+    doc.setFillColor(...col)
+    doc.roundedRect(W - M - 34, y - 7, 34, 11, 1.5, 1.5, 'F')
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(255, 255, 255)
+    doc.text(`${pct} %`, W - M - 17, y + 0.5, { align: 'center' })
+    y += 8
+
+    doc.setFillColor(238, 240, 245)
+    doc.rect(M, y, CW, 7, 'F')
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(100, 105, 125)
+    doc.text('Havaintoluokka', M + 2, y + 4.8)
+    doc.text('Oikein', M + CW - 62, y + 4.8, { align: 'right' })
+    doc.text('Väärin', M + CW - 34, y + 4.8, { align: 'right' })
+    doc.text('%', M + CW - 2, y + 4.8, { align: 'right' })
+    y += 7
+    categories.forEach((c, i) => {
+      ensureSpace(8)
+      const cnt = counts[c.key] || { oikein: 0, vaarin: 0 }
+      const cpct = categoryPct(cnt)
+      if (i % 2 === 1) { doc.setFillColor(247, 248, 250); doc.rect(M, y, CW, 7, 'F') }
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(30, 34, 60)
+      doc.text(c.label, M + 2, y + 4.8)
+      doc.setTextColor(26, 138, 80)
+      doc.text(String(cnt.oikein), M + CW - 62, y + 4.8, { align: 'right' })
+      doc.setTextColor(214, 48, 48)
+      doc.text(String(cnt.vaarin), M + CW - 34, y + 4.8, { align: 'right' })
+      doc.setTextColor(60, 64, 90)
+      doc.text(cpct == null ? '–' : `${cpct} %`, M + CW - 2, y + 4.8, { align: 'right' })
+      y += 7
+    })
+    y += 5
+    ensureSpace(10)
+    doc.setFont('helvetica', 'italic'); doc.setFontSize(7.5); doc.setTextColor(140, 144, 160)
+    const lines = doc.splitTextToSize(legalNote, CW)
+    doc.text(lines, M, y); y += lines.length * 3.6 + 8
+  }
+
+  drawMeasurement('TR-mittaus', TR_CATEGORIES, trCounts, TR_LEGAL_NOTE)
+  drawMeasurement('MVR-mittaus', MVR_CATEGORIES, mvrCounts, MVR_LEGAL_NOTE)
+
+  if (obs.length > 0) {
+    ensureSpace(14)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
+    doc.text('Havainnot', M, y); y += 9
+
+    const sevCol = { Kriittinen: [214, 48, 48], Huomio: [208, 120, 0], Info: [26, 138, 80] }
+    for (let i = 0; i < obs.length; i++) {
+      const o = obs[i]
+      ensureSpace(16)
+      const col = sevCol[o.sev] || [80, 80, 80]
+      doc.setFillColor(...col)
+      doc.roundedRect(M, y, CW, 8, 1.5, 1.5, 'F')
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(255, 255, 255)
+      doc.text(`${i + 1}. ${o.havainto || '(ei kuvausta)'}`, M + 3, y + 5.5)
+      doc.setFontSize(9)
+      doc.text(o.sev, W - M - 3, y + 5.5, { align: 'right' })
+      y += 11
+
+      if (o.yritys) {
+        ensureSpace(6)
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(100, 105, 125)
+        doc.text('Yritys: ', M + 2, y)
+        doc.setFont('helvetica', 'normal'); doc.setTextColor(30, 34, 60)
+        doc.text(o.yritys, M + 18, y)
+        y += 5.5
+      }
+      if (o.createdAt) {
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(150, 154, 170)
+        doc.text(new Date(o.createdAt).toLocaleString('fi-FI', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), M + 2, y)
+        y += 5
+      }
+      if (o.note) {
+        ensureSpace(8)
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(40, 40, 40)
+        const lines = doc.splitTextToSize(o.note, CW - 4)
+        doc.text(lines, M + 2, y); y += lines.length * 5 + 2
+      }
+      for (const photo of (o.photos || [])) {
+        const img = new Image(); img.src = photo.src
+        await new Promise(r => { img.onload = r; img.onerror = r })
+        const c = document.createElement('canvas')
+        c.width = img.naturalWidth; c.height = img.naturalHeight
+        c.getContext('2d').drawImage(img, 0, 0)
+        const corrected = c.toDataURL('image/jpeg', 0.85)
+        const nw = img.naturalWidth || 800, nh = img.naturalHeight || 600
+        const sc = Math.min((CW - 4) / nw, 220 / nh)
+        const dw = nw * sc, dh = nh * sc
+        ensureSpace(dh + 4)
+        try { doc.addImage(corrected, 'JPEG', M + 2, y, dw, dh) } catch {}
+        y += dh + 4
+      }
+      y += 3
+    }
+  }
+
+  const tp = doc.getNumberOfPages()
+  for (let p = 1; p <= tp; p++) {
+    doc.setPage(p); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(160, 160, 160)
+    doc.text(`Korpnex Oy · Työturvallisuusraportti · ${dateStr}`, M, 292)
+    doc.text(`${p} / ${tp}`, W - M, 292, { align: 'right' })
+  }
+
+  const blob = doc.output('blob')
+  const filename = `Tyoturvallisuus_${(site || 'kohde').replace(/\s+/g, '_')}_${dateStr.replace(/\./g, '-')}.pdf`
+  return { blob, filename }
+}
+
 // Downscale + re-encode an image file straight away. Raw phone photos can be
 // several MB — compressing keeps PDF exports light and fast.
 export function compressImage(file, maxDim = 1600, quality = 0.75) {
