@@ -69,6 +69,33 @@ export function indexColor(pct) {
 
 export const SEV_LABELS = ['Kriittinen', 'Huomio', 'Info']
 
+// Kokoaa havainnoista yhteenvedon: kokonaismäärät vakavuuksittain ja tilan
+// mukaan, sekä erittely urakoitsijoittain (yritys-kentän mukaan). Käytetään
+// sekä Valvomon Yhteenveto-välilehdellä että PDF-raportissa, jotta pitkänkin
+// työmaan koko historiasta näkee heti mistä puutteet tulevat, kuinka paljon
+// niitä on, ja kuinka moni on vielä korjaamatta.
+export function summarizeObservations(obs) {
+  const bySev = { Kriittinen: 0, Huomio: 0, Info: 0 }
+  const byStatus = { avoin: 0, korjattu: 0 }
+  const yritysMap = new Map()
+  for (const o of obs) {
+    const sev = bySev[o.sev] != null ? o.sev : null
+    if (sev) bySev[sev]++
+    const status = o.status === 'korjattu' ? 'korjattu' : 'avoin'
+    byStatus[status]++
+    const yritys = (o.yritys || '').trim() || 'Ei merkitty'
+    if (!yritysMap.has(yritys)) {
+      yritysMap.set(yritys, { yritys, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, korjattu: 0 })
+    }
+    const row = yritysMap.get(yritys)
+    row.total++
+    if (sev) row[sev]++
+    row[status]++
+  }
+  const byYritys = [...yritysMap.values()].sort((a, b) => b.total - a.total)
+  return { total: obs.length, bySev, byStatus, byYritys }
+}
+
 // Rakentaa PDF-raportin (TR-/MVR-mittaus + havainnot) samalla ulkoasulla
 // riippumatta siitä kutsutaanko tätä tarkastuksen puhelinnäkymästä (yhden
 // työmaan senhetkinen luonnos, kuvat mukana) vai Valvomosta (pilvestä haettu
@@ -146,6 +173,53 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
 
   drawMeasurement('TR-mittaus', TR_CATEGORIES, trCounts, TR_LEGAL_NOTE)
   drawMeasurement('MVR-mittaus', MVR_CATEGORIES, mvrCounts, MVR_LEGAL_NOTE)
+
+  // Yhteenveto urakoitsijoittain -- erityisen hyödyllinen pitkän työmaan
+  // koko historian kattavassa raportissa (ks. summarizeObservations).
+  if (obs.length > 0) {
+    const summary = summarizeObservations(obs)
+    ensureSpace(20)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
+    doc.text('Yhteenveto', M, y); y += 9
+
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
+    doc.setTextColor(40, 40, 40)
+    doc.text(`Havaintoja yhteensä: ${summary.total}`, M, y)
+    doc.setTextColor(214, 48, 48); doc.text(`Kriittinen: ${summary.bySev.Kriittinen}`, M + 62, y)
+    doc.setTextColor(208, 120, 0); doc.text(`Huomio: ${summary.bySev.Huomio}`, M + 108, y)
+    doc.setTextColor(26, 138, 80); doc.text(`Info: ${summary.bySev.Info}`, M + 148, y)
+    y += 6
+    doc.setTextColor(40, 40, 40)
+    doc.text(`Avoinna: ${summary.byStatus.avoin}`, M, y)
+    doc.setTextColor(26, 138, 80); doc.text(`Korjattu: ${summary.byStatus.korjattu}`, M + 62, y)
+    y += 9
+
+    if (summary.byYritys.length > 0) {
+      doc.setFillColor(238, 240, 245)
+      doc.rect(M, y, CW, 7, 'F')
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(100, 105, 125)
+      doc.text('Yritys / urakoitsija', M + 2, y + 4.8)
+      doc.text('Yht.', M + CW - 118, y + 4.8, { align: 'right' })
+      doc.text('Kriitt.', M + CW - 88, y + 4.8, { align: 'right' })
+      doc.text('Huomio', M + CW - 58, y + 4.8, { align: 'right' })
+      doc.text('Info', M + CW - 32, y + 4.8, { align: 'right' })
+      doc.text('Avoin', M + CW - 2, y + 4.8, { align: 'right' })
+      y += 7
+      summary.byYritys.forEach((row, i) => {
+        ensureSpace(8)
+        if (i % 2 === 1) { doc.setFillColor(247, 248, 250); doc.rect(M, y, CW, 7, 'F') }
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(30, 34, 60)
+        doc.text(row.yritys, M + 2, y + 4.8)
+        doc.text(String(row.total), M + CW - 118, y + 4.8, { align: 'right' })
+        doc.setTextColor(214, 48, 48); doc.text(String(row.Kriittinen), M + CW - 88, y + 4.8, { align: 'right' })
+        doc.setTextColor(208, 120, 0); doc.text(String(row.Huomio), M + CW - 58, y + 4.8, { align: 'right' })
+        doc.setTextColor(26, 138, 80); doc.text(String(row.Info), M + CW - 32, y + 4.8, { align: 'right' })
+        doc.setTextColor(60, 64, 90); doc.text(String(row.avoin), M + CW - 2, y + 4.8, { align: 'right' })
+        y += 7
+      })
+    }
+    y += 8
+  }
 
   if (obs.length > 0) {
     ensureSpace(14)
