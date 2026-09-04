@@ -79,9 +79,10 @@ export default function App() {
     syncTimer.current = setTimeout(() => setSyncMsg(''), 3000)
   }
 
-  // Työmaalista Supabasesta (pudotusvalikkoa varten)
+  // Työmaalista Supabasesta (pudotusvalikkoa varten) -- arkistoidut työmaat
+  // (poistettu/hallinnoitu Valvomosta) eivät näy kentän valikossa.
   useEffect(() => {
-    sb.from('worksites').select('*').order('name').then(({ data, error }) => {
+    sb.from('worksites').select('*').eq('archived', false).order('name').then(({ data, error }) => {
       if (!error && data) setWorksites(data)
     })
   }, [])
