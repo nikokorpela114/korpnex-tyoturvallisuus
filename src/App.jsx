@@ -3,6 +3,7 @@ import { sb } from './supabaseClient.js'
 import {
   TR_CATEGORIES, MVR_CATEGORIES, TR_LEGAL_NOTE, MVR_LEGAL_NOTE,
   emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, compressImage, buildReportPDF,
+  addNote, updateNote, removeNote,
 } from './shared.js'
 import Dashboard from './Dashboard.jsx'
 
@@ -269,6 +270,20 @@ export default function App() {
     timer.current = setTimeout(() => saveMeasurement(type), 1000)
   }
 
+  // Puutteiden (huomautus/vastuuhenkilö/korjattu) hallinta yhdelle
+  // kategorialle kerrallaan. Sama debounced-tallennus kuin bump():ssa —
+  // kirjoittaminen ei laukaise verkkopyyntöä joka näppäimestä.
+  function noteAction(type, action, ...args) {
+    const setFn = type === 'tr' ? setTrCounts : setMvrCounts
+    const timer = type === 'tr' ? trTimer : mvrTimer
+    setFn(prev => action(prev, ...args))
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => saveMeasurement(type), 800)
+  }
+  const handleAddNote = (type, catKey) => noteAction(type, addNote, catKey)
+  const handleUpdateNote = (type, catKey, id, patch) => noteAction(type, (c) => updateNote(c, catKey, id, patch))
+  const handleRemoveNote = (type, catKey, id) => noteAction(type, (c) => removeNote(c, catKey, id))
+
   function resetMeasurement(type) {
     const label = type === 'tr' ? 'TR-mittauksen' : 'MVR-mittauksen'
     if (!window.confirm(`Nollataanko ${label} laskurit?`)) return
@@ -516,6 +531,9 @@ export default function App() {
             legalNote={tab === 'tr' ? TR_LEGAL_NOTE : MVR_LEGAL_NOTE}
             onBump={bump}
             onReset={resetMeasurement}
+            onAddNote={handleAddNote}
+            onUpdateNote={handleUpdateNote}
+            onRemoveNote={handleRemoveNote}
           />
         )}
       </div>
@@ -567,9 +585,13 @@ export default function App() {
 // Yhden TR- tai MVR-mittauksen näkymä: jokaiselle havaintoluokalle kaksi
 // isoa "tukkimiehen kirjanpito" -tyylistä laskuripainiketta (Oikein/Väärin),
 // ja ylhäällä koko mittauksen kokonaisindeksi joka päivittyy heti.
-function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset }) {
+function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset, onAddNote, onUpdateNote, onRemoveNote }) {
   const { oikein, vaarin, total, pct } = overallIndex(counts, categories)
   const color = indexColor(pct)
+  // Mikä kategorian puutelista on auki — pelkkä näyttötila, ei tallenneta.
+  const [openNotes, setOpenNotes] = useState({})
+  const toggleNotes = key => setOpenNotes(prev => ({ ...prev, [key]: !prev[key] }))
+
   return (
     <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ background: '#fff', border: '1px solid #d3d6e0', borderRadius: 12, padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -585,8 +607,10 @@ function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset }
       </div>
 
       {categories.map(c => {
-        const cnt = counts[c.key] || { oikein: 0, vaarin: 0 }
+        const cnt = counts[c.key] || { oikein: 0, vaarin: 0, notes: [] }
         const cpct = categoryPct(cnt)
+        const notes = cnt.notes || []
+        const notesOpen = !!openNotes[c.key]
         return (
           <div key={c.key} style={{ background: '#fff', border: '1px solid #d3d6e0', borderRadius: 12, padding: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -610,6 +634,47 @@ function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset }
                 </button>
               )}
             </div>
+
+            {/* Puutteet: vapaaehtoinen dokumentointi virallisen lomakkeen
+                Huomautukset/Vastuuhenkilö/Korjattu-sarakkeen tapaan. */}
+            <button onClick={() => toggleNotes(c.key)} style={{ marginTop: 10, background: 'none', border: 'none', padding: '4px 0', fontSize: 12, fontWeight: 700, color: notes.length ? '#d63030' : '#6a7086', display: 'flex', alignItems: 'center', gap: 5 }}>
+              {notesOpen ? '▾' : '▸'} 🗒 Puutteet {notes.length ? `(${notes.length})` : ''}
+            </button>
+
+            {notesOpen && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, paddingTop: 10, borderTop: '1px solid #eef0f5' }}>
+                {notes.map(n => (
+                  <div key={n.id} style={{ background: '#f9fafc', border: '1px solid #eef0f5', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ ...labelStyle, marginBottom: 0 }}>Kuvaus puutteesta</div>
+                      <button onClick={() => onRemoveNote(type, c.key, n.id)} style={{ background: 'none', border: 'none', color: '#6a7086', fontSize: 15 }}>🗑</button>
+                    </div>
+                    <textarea style={{ ...selectStyle, resize: 'none', minHeight: 44, lineHeight: 1.4 }}
+                      placeholder="esim. Suojakaide puuttuu tasolta 2" value={n.desc}
+                      onChange={e => onUpdateNote(type, c.key, n.id, { desc: e.target.value })} />
+                    <div>
+                      <div style={labelStyle}>Vastuuhenkilö</div>
+                      <input style={inputStyle} placeholder="Kuka korjaa" value={n.vastuuhenkilo}
+                        onChange={e => onUpdateNote(type, c.key, n.id, { vastuuhenkilo: e.target.value })} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#14183a' }}>
+                        <input type="checkbox" checked={n.korjattu}
+                          onChange={e => onUpdateNote(type, c.key, n.id, { korjattu: e.target.checked })} />
+                        Korjattu
+                      </label>
+                      {n.korjattu && (
+                        <input type="date" style={{ ...inputStyle, flex: 1 }} value={n.korjattuPvm}
+                          onChange={e => onUpdateNote(type, c.key, n.id, { korjattuPvm: e.target.value })} />
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <button onClick={() => onAddNote(type, c.key)} style={{ padding: '9px 4px', border: '1.5px dashed #b3b8c8', borderRadius: 8, background: 'none', color: '#6a7086', fontSize: 12.5 }}>
+                  ＋ Lisää puute
+                </button>
+              </div>
+            )}
           </div>
         )
       })}

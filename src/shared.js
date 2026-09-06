@@ -34,11 +34,44 @@ export const MVR_LEGAL_NOTE =
   'sovellettuna maa- ja vesirakennustyömaan olosuhteisiin. Säännöllisesti tehtynä MVR-mittaus täyttää yhteisen työmaan viikoittaisen ' +
   'kunnossapitotarkastuksen vaatimuksen.'
 
-// Tyhjä laskuri jokaiselle luokka-avaimelle: { [key]: { oikein, vaarin } }
+// Tyhjä laskuri jokaiselle luokka-avaimelle:
+// { [key]: { oikein, vaarin, notes: [] } }
+// notes-taulukko vastaa virallisen TR-/MVR-lomakkeen
+// "Huomautukset / Vastuuhenkilö / Korjattu pvm" -saraketta: jokainen
+// väärin-havainto voidaan tarvittaessa dokumentoida erikseen.
 export function emptyCounts(categories) {
   const o = {}
-  categories.forEach(c => { o[c.key] = { oikein: 0, vaarin: 0 } })
+  categories.forEach(c => { o[c.key] = { oikein: 0, vaarin: 0, notes: [] } })
   return o
+}
+
+function noteId() {
+  return 'n-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+}
+
+// Lisää tyhjän puute-rivin annettuun kategoriaan. Palauttaa UUDEN counts-
+// objektin (ei mutatoi alkuperäistä) — sopii suoraan setStateen.
+export function addNote(counts, catKey) {
+  const cur = counts[catKey] || { oikein: 0, vaarin: 0, notes: [] }
+  const notes = [...(cur.notes || []), {
+    id: noteId(), desc: '', vastuuhenkilo: '', korjattu: false, korjattuPvm: '',
+  }]
+  return { ...counts, [catKey]: { ...cur, notes } }
+}
+
+// Päivittää yhden puute-rivin kentän (desc / vastuuhenkilo / korjattu /
+// korjattuPvm). patch on osittainen objekti, esim. { desc: 'uusi teksti' }.
+export function updateNote(counts, catKey, id, patch) {
+  const cur = counts[catKey] || { oikein: 0, vaarin: 0, notes: [] }
+  const notes = (cur.notes || []).map(n => n.id === id ? { ...n, ...patch } : n)
+  return { ...counts, [catKey]: { ...cur, notes } }
+}
+
+// Poistaa yhden puute-rivin.
+export function removeNote(counts, catKey, id) {
+  const cur = counts[catKey] || { oikein: 0, vaarin: 0, notes: [] }
+  const notes = (cur.notes || []).filter(n => n.id !== id)
+  return { ...counts, [catKey]: { ...cur, notes } }
 }
 
 // Yhden luokan tulos prosentteina (null jos ei yhtään havaintoa vielä)
@@ -151,7 +184,7 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
     y += 7
     categories.forEach((c, i) => {
       ensureSpace(8)
-      const cnt = counts[c.key] || { oikein: 0, vaarin: 0 }
+      const cnt = counts[c.key] || { oikein: 0, vaarin: 0, notes: [] }
       const cpct = categoryPct(cnt)
       if (i % 2 === 1) { doc.setFillColor(247, 248, 250); doc.rect(M, y, CW, 7, 'F') }
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(30, 34, 60)
@@ -163,6 +196,26 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
       doc.setTextColor(60, 64, 90)
       doc.text(cpct == null ? '–' : `${cpct} %`, M + CW - 2, y + 4.8, { align: 'right' })
       y += 7
+
+      // Puutteet (huomautus / vastuuhenkilö / korjattu) — vastaa virallisen
+      // TR-/MVR-lomakkeen omaa saraketta. Tulostetaan vain jos rivejä on.
+      const notes = (cnt.notes || []).filter(n => (n.desc || '').trim())
+      if (notes.length) {
+        notes.forEach(n => {
+          ensureSpace(10)
+          doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(120, 40, 40)
+          const lines = doc.splitTextToSize(`• ${n.desc}`, CW - 8)
+          doc.text(lines, M + 6, y + 3.6)
+          y += lines.length * 3.8
+          const meta = []
+          if (n.vastuuhenkilo) meta.push(`Vastuuhenkilö: ${n.vastuuhenkilo}`)
+          meta.push(n.korjattu ? `Korjattu${n.korjattuPvm ? ' ' + n.korjattuPvm : ''}` : 'Ei vielä korjattu')
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(140, 144, 160)
+          doc.text(meta.join('   ·   '), M + 6, y + 3.4)
+          y += 5.5
+        })
+        y += 1
+      }
     })
     y += 5
     ensureSpace(10)

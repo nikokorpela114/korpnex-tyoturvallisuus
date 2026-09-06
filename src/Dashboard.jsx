@@ -3,6 +3,7 @@ import { sb } from './supabaseClient.js'
 import {
   TR_CATEGORIES, MVR_CATEGORIES, TR_LEGAL_NOTE, MVR_LEGAL_NOTE,
   emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, buildReportPDF, summarizeObservations,
+  addNote, updateNote, removeNote,
 } from './shared.js'
 
 // Valvomo (?valvomo) — Korpnexin hallintapaneeli, tarkoitettu käytettäväksi
@@ -215,6 +216,19 @@ export default function Dashboard() {
       const next = { ...cur, [field]: Math.max(0, cur[field] + delta) }
       return { ...prev, counts: { ...prev.counts, [catKey]: next } }
     })
+  }
+
+  // Puutteiden hallinta muokattavana olevalle mittaukselle (editMeasure).
+  // Tallennus tapahtuu vasta "Tallenna muutokset" -painikkeesta, kuten
+  // laskureidenkin kohdalla.
+  function addNoteEdit(catKey) {
+    setEditMeasure(prev => prev ? { ...prev, counts: addNote(prev.counts, catKey) } : prev)
+  }
+  function updateNoteEdit(catKey, id, patch) {
+    setEditMeasure(prev => prev ? { ...prev, counts: updateNote(prev.counts, catKey, id, patch) } : prev)
+  }
+  function removeNoteEdit(catKey, id) {
+    setEditMeasure(prev => prev ? { ...prev, counts: removeNote(prev.counts, catKey, id) } : prev)
   }
 
   async function saveEditMeasure() {
@@ -436,6 +450,9 @@ export default function Dashboard() {
                     onSaveEdit={saveEditMeasure}
                     onArchive={archiveMeasurement}
                     onAddNew={addNewMeasurement}
+                    onAddNote={addNoteEdit}
+                    onUpdateNote={updateNoteEdit}
+                    onRemoveNote={removeNoteEdit}
                   />
                 )}
               </div>
@@ -656,7 +673,11 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
 // viimeisin), jokaista voi arkistoida, ja "Muokkaa" avaa saman
 // laskuri-käyttöliittymän kuin kenttäsovelluksessa lukujen korjaamiseksi.
 // "＋ Uusi mittaus" luo tälle työmaalle kokonaan uuden tyhjän mittausrivin.
-function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onStartEdit, onCancelEdit, onBumpEdit, onSaveEdit, onArchive, onAddNew }) {
+function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onStartEdit, onCancelEdit, onBumpEdit, onSaveEdit, onArchive, onAddNew, onAddNote, onUpdateNote, onRemoveNote }) {
+  // Mikä kategorian puutelista on auki muokkausnäkymässä — pelkkä
+  // näyttötila, nollautuu kun muokkaus suljetaan (uusi editMeasure.id).
+  const [openNotes, setOpenNotes] = useState({})
+  const toggleNotes = key => setOpenNotes(prev => ({ ...prev, [key]: !prev[key] }))
   const editingThis = editMeasure && editMeasure.type === type
   return (
     <div className="kx-measure-panel">
@@ -698,8 +719,10 @@ function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onSt
               {isEditingRow && (
                 <div className="kx-measure-edit">
                   {categories.map(c => {
-                    const cnt = editMeasure.counts[c.key] || { oikein: 0, vaarin: 0 }
+                    const cnt = editMeasure.counts[c.key] || { oikein: 0, vaarin: 0, notes: [] }
                     const cpct = categoryPct(cnt)
+                    const notes = cnt.notes || []
+                    const notesOpen = !!openNotes[c.key]
                     return (
                       <div key={c.key} className="kx-measure-cat">
                         <div className="kx-measure-cat-head">
@@ -713,6 +736,41 @@ function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onSt
                             <button className="kx-count-btn undo" onClick={() => { if (cnt.vaarin > 0) onBumpEdit(c.key, 'vaarin', -1); else onBumpEdit(c.key, 'oikein', -1) }}>↺</button>
                           )}
                         </div>
+
+                        <button className="kx-note-toggle" onClick={() => toggleNotes(c.key)} style={{ color: notes.length ? '#d63030' : '#6a7086' }}>
+                          {notesOpen ? '▾' : '▸'} 🗒 Puutteet {notes.length ? `(${notes.length})` : ''}
+                        </button>
+
+                        {notesOpen && (
+                          <div className="kx-note-list">
+                            {notes.map(n => (
+                              <div key={n.id} className="kx-note-item">
+                                <div className="kx-note-row" style={{ justifyContent: 'space-between' }}>
+                                  <span className="kx-label kx-label-flat">Kuvaus puutteesta</span>
+                                  <button className="kx-note-del" onClick={() => onRemoveNote(c.key, n.id)}>🗑</button>
+                                </div>
+                                <textarea className="kx-note-field" rows={2}
+                                  placeholder="esim. Suojakaide puuttuu tasolta 2" value={n.desc}
+                                  onChange={e => onUpdateNote(c.key, n.id, { desc: e.target.value })} />
+                                <span className="kx-label kx-label-flat">Vastuuhenkilö</span>
+                                <input className="kx-note-field" placeholder="Kuka korjaa" value={n.vastuuhenkilo}
+                                  onChange={e => onUpdateNote(c.key, n.id, { vastuuhenkilo: e.target.value })} />
+                                <div className="kx-note-row">
+                                  <label className="kx-note-checklabel">
+                                    <input type="checkbox" checked={n.korjattu}
+                                      onChange={e => onUpdateNote(c.key, n.id, { korjattu: e.target.checked })} />
+                                    Korjattu
+                                  </label>
+                                  {n.korjattu && (
+                                    <input type="date" className="kx-note-field" style={{ flex: 1 }} value={n.korjattuPvm}
+                                      onChange={e => onUpdateNote(c.key, n.id, { korjattuPvm: e.target.value })} />
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                            <button className="kx-note-add" onClick={() => onAddNote(c.key)}>＋ Lisää puute</button>
+                          </div>
+                        )}
                       </div>
                     )
                   })}
@@ -856,6 +914,14 @@ const DASHBOARD_CSS = `
 .kx-count-btn.no { border: 1px solid #d63030; background: rgba(214,48,48,0.1); color: #d63030; }
 .kx-count-btn.undo { flex: 0 0 auto; padding: 9px 12px; border: 1px solid #d3d6e0; background: #eef0f5; color: #6a7086; }
 .kx-legal-note { font-size: 11px; color: #9aa2c0; line-height: 1.5; padding: 12px 2px 4px; }
+.kx-note-toggle { margin-top: 10px; background: none; border: none; padding: 4px 0; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; }
+.kx-note-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding-top: 10px; border-top: 1px solid #eef0f5; }
+.kx-note-item { background: #fff; border: 1px solid #eef0f5; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.kx-note-row { display: flex; align-items: center; gap: 8px; }
+.kx-note-field { background: #fff; border: 1px solid #d3d6e0; border-radius: 8px; color: #14183a; font-size: 13px; padding: 8px 10px; width: 100%; outline: none; resize: none; }
+.kx-note-checklabel { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #14183a; }
+.kx-note-del { background: none; border: none; color: #6a7086; font-size: 15px; }
+.kx-note-add { padding: 9px 4px; border: 1.5px dashed #b3b8c8; border-radius: 8px; background: none; color: #6a7086; font-size: 12.5px; }
 .kx-empty-note { text-align: center; padding: 20px; color: #6a7086; font-size: 13px; background: #f9fafc; border-radius: 10px; }
 
 .kx-toast { position: fixed; bottom: 20px; right: 20px; background: #14183a; color: #fff; font-size: 13px; font-weight: 600; padding: 10px 16px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.2); z-index: 50; }
