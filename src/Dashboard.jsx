@@ -230,6 +230,21 @@ export default function Dashboard() {
     }
   }
 
+  // Pysyvä poisto — sallittu vain jo arkistoiduille, jotta vahingossa
+  // arkistointi ei koskaan johda peruuttamattomaan tietojen katoamiseen
+  // ilman erillistä, tarkoituksellista lisävaihetta.
+  async function deleteSubcontractor(s) {
+    if (!window.confirm(`Poistetaanko "${s.name}" pysyvästi? Tätä ei voi perua.`)) return
+    const { error } = await sb.from('subcontractors').delete().eq('id', s.id)
+    if (!error) {
+      setArchivedSub(prev => prev.filter(x => x.id !== s.id))
+      showToast('🗑 Poistettu pysyvästi')
+    } else {
+      console.error('deleteSubcontractor failed:', error)
+      showToast('⚠ Poisto epäonnistui')
+    }
+  }
+
   // --- Mittausten hallinta (koko historia, ei vain viimeisin) ---
   function startEditMeasure(type, row) {
     setEditMeasure({ type, id: row.id, counts: row.counts || emptyCounts(type === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES) })
@@ -397,7 +412,7 @@ export default function Dashboard() {
                     <button className="kx-site-name" onClick={() => setSelected(w)}>{w.name}</button>
                     <div className="kx-site-actions">
                       <button className="kx-icon-btn" title="Nimeä uudelleen" onClick={() => { setEditingSiteId(w.id); setEditSiteName(w.name) }}>✏️</button>
-                      <button className="kx-icon-btn" title="Arkistoi" onClick={() => archiveWorksite(w)}>🗄</button>
+                      <button className="kx-icon-btn kx-icon-btn-danger" title="Arkistoi työmaa" onClick={() => archiveWorksite(w)}>🗄 Arkistoi</button>
                     </div>
                   </>
                 )}
@@ -517,7 +532,7 @@ export default function Dashboard() {
                     active={subcontractors} archived={archivedSub}
                     showArchived={showArchivedSub} setShowArchived={setShowArchivedSub}
                     newName={newSubName} setNewName={setNewSubName}
-                    onAdd={addSubcontractor} onToggleArchive={toggleArchiveSub}
+                    onAdd={addSubcontractor} onToggleArchive={toggleArchiveSub} onDelete={deleteSubcontractor}
                   />
                 )}
               </div>
@@ -899,7 +914,7 @@ function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, subc
 // Työmaan aliurakoitsijoiden hallinta: lisäys, lista, arkistointi/palautus.
 // Tätä listaa käytetään Havaintojen Yritys- ja puutteiden Vastuuhenkilö-
 // kenttien valintalistana koko Valvomossa ja kenttäsovelluksessa.
-function SubcontractorsPanel({ active, archived, showArchived, setShowArchived, newName, setNewName, onAdd, onToggleArchive }) {
+function SubcontractorsPanel({ active, archived, showArchived, setShowArchived, newName, setNewName, onAdd, onToggleArchive, onDelete }) {
   const list = showArchived ? archived : active
   return (
     <div className="kx-obs-panel">
@@ -924,9 +939,14 @@ function SubcontractorsPanel({ active, archived, showArchived, setShowArchived, 
           <div key={s.id} className="kx-card kx-measure-row">
             <div className="kx-measure-row-head">
               <div className="kx-measure-row-date">{s.name}</div>
-              <button className="kx-btn-ghost kx-btn-sm" onClick={() => onToggleArchive(s)}>
-                {s.archived ? '↺ Palauta' : '🗄 Arkistoi'}
-              </button>
+              <div className="kx-measure-row-actions">
+                <button className="kx-btn-ghost kx-btn-sm" onClick={() => onToggleArchive(s)}>
+                  {s.archived ? '↺ Palauta' : '🗄 Arkistoi'}
+                </button>
+                {s.archived && (
+                  <button className="kx-delete-btn" onClick={() => onDelete(s)}>🗑 Poista pysyvästi</button>
+                )}
+              </div>
             </div>
           </div>
         ))}
@@ -957,10 +977,13 @@ const DASHBOARD_CSS = `
 .kx-site-name:hover { background: #f4f5f8; }
 .kx-site-row.active .kx-site-name { color: #17275c; font-weight: 800; }
 .kx-site-name-static { flex: 1; padding: 8px 8px; font-size: 13px; color: #6a7086; }
-.kx-site-actions { display: flex; gap: 2px; opacity: 0.7; }
-.kx-site-row:hover .kx-site-actions { opacity: 1; }
+.kx-site-actions { display: flex; gap: 6px; opacity: 1; align-items: center; }
 .kx-icon-btn { background: none; border: none; font-size: 13px; padding: 5px 6px; border-radius: 6px; cursor: pointer; color: #6a7086; }
 .kx-icon-btn:hover { background: #eef0f5; }
+.kx-icon-btn-danger { font-size: 11px; font-weight: 700; padding: 5px 8px; color: #a65b00; background: rgba(208,120,0,0.1); white-space: nowrap; }
+.kx-icon-btn-danger:hover { background: rgba(208,120,0,0.2); }
+.kx-delete-btn { background: rgba(214,48,48,0.1); border: 1px solid rgba(214,48,48,0.3); border-radius: 8px; color: #d63030; font-size: 12px; font-weight: 700; padding: 6px 10px; cursor: pointer; }
+.kx-delete-btn:hover { background: rgba(214,48,48,0.2); }
 .kx-site-edit { display: flex; align-items: center; gap: 4px; width: 100%; }
 .kx-add-row { margin-top: 4px; }
 .kx-add-site-btn { width: 100%; padding: 9px; border: 1.5px dashed #b3b8c8; border-radius: 8px; background: none; color: #6a7086; font-size: 13px; cursor: pointer; }
