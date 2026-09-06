@@ -38,6 +38,10 @@ export default function Dashboard() {
   const [showArchivedObs, setShowArchivedObs] = useState(false)
   const [trRows, setTrRows] = useState([])
   const [mvrRows, setMvrRows] = useState([])
+  const [subcontractors, setSubcontractors] = useState([])
+  const [newSubName, setNewSubName] = useState('')
+  const [showArchivedSub, setShowArchivedSub] = useState(false)
+  const [archivedSub, setArchivedSub] = useState([])
   const [editMeasure, setEditMeasure] = useState(null) // { type, id, counts } | null
 
   const [pdfMode, setPdfMode] = useState(false)
@@ -77,19 +81,23 @@ export default function Dashboard() {
   useEffect(() => { loadWorksites() }, [loadWorksites])
 
   const loadSite = useCallback(async (siteName) => {
-    if (!siteName) { setObs([]); setTrRows([]); setMvrRows([]); return }
+    if (!siteName) { setObs([]); setTrRows([]); setMvrRows([]); setSubcontractors([]); setArchivedSub([]); return }
     setLoading(true)
     setErrMsg('')
     try {
-      const [obsRes, trRes, mvrRes] = await Promise.all([
+      const [obsRes, trRes, mvrRes, subRes, subArchRes] = await Promise.all([
         sb.from('safety_observations').select('*').eq('site', siteName).order('created_at', { ascending: false }),
         sb.from('safety_measurements').select('*').eq('site', siteName).eq('type', 'tr').eq('archived', false).order('created_at', { ascending: false }),
         sb.from('safety_measurements').select('*').eq('site', siteName).eq('type', 'mvr').eq('archived', false).order('created_at', { ascending: false }),
+        sb.from('subcontractors').select('*').eq('site', siteName).eq('archived', false).order('name'),
+        sb.from('subcontractors').select('*').eq('site', siteName).eq('archived', true).order('name'),
       ])
       if (obsRes.error || trRes.error || mvrRes.error) throw (obsRes.error || trRes.error || mvrRes.error)
       setObs(obsRes.data || [])
       setTrRows(trRes.data || [])
       setMvrRows(mvrRes.data || [])
+      setSubcontractors(subRes.data || [])
+      setArchivedSub(subArchRes.data || [])
       setEditMeasure(null)
     } catch (e) {
       console.error('Valvomo load failed:', e)
@@ -186,6 +194,42 @@ export default function Dashboard() {
     }
   }
 
+  // --- Aliurakoitsijoiden hallinta (työmaakohtainen lista) ---
+  async function addSubcontractor() {
+    const name = newSubName.trim()
+    if (!name || !selected) return
+    const existing = subcontractors.find(s => s.name.toLowerCase() === name.toLowerCase())
+    if (existing) { setNewSubName(''); return }
+    const { data, error } = await sb.from('subcontractors')
+      .insert([{ site: selected.name, name }]).select()
+    if (!error && data?.[0]) {
+      setSubcontractors(prev => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name)))
+      showToast('✓ Aliurakoitsija lisätty')
+    } else {
+      console.error('addSubcontractor failed:', error)
+      showToast('⚠ Lisäys epäonnistui')
+    }
+    setNewSubName('')
+  }
+
+  async function toggleArchiveSub(s) {
+    const next = !s.archived
+    const { error } = await sb.from('subcontractors').update({ archived: next }).eq('id', s.id)
+    if (!error) {
+      if (next) {
+        setSubcontractors(prev => prev.filter(x => x.id !== s.id))
+        setArchivedSub(prev => [...prev, { ...s, archived: true }].sort((a, b) => a.name.localeCompare(b.name)))
+      } else {
+        setArchivedSub(prev => prev.filter(x => x.id !== s.id))
+        setSubcontractors(prev => [...prev, { ...s, archived: false }].sort((a, b) => a.name.localeCompare(b.name)))
+      }
+      showToast(next ? '🗄 Aliurakoitsija arkistoitu' : '↺ Aliurakoitsija palautettu')
+    } else {
+      console.error('toggleArchiveSub failed:', error)
+      showToast('⚠ Toiminto epäonnistui')
+    }
+  }
+
   // --- Mittausten hallinta (koko historia, ei vain viimeisin) ---
   function startEditMeasure(type, row) {
     setEditMeasure({ type, id: row.id, counts: row.counts || emptyCounts(type === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES) })
@@ -195,6 +239,15 @@ export default function Dashboard() {
     if (!selected) return
     const categories = type === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES
     const counts = emptyCounts(categories)
+    // Edellisin mittaus on jo ladattuna (rows on järjestetty uusin ensin) —
+    // siirretään sen avoimet (ei korjatut) puutteet uuden mittauksen pohjaksi.
+    const prevRow = (type === 'tr' ? trRows : mvrRows)[0]
+    if (prevRow?.counts) {
+      categories.forEach(c => {
+        const prevNotes = (prevRow.counts[c.key]?.notes || []).filter(n => !n.korjattu && (n.desc || '').trim())
+        counts[c.key] = { ...counts[c.key], notes: prevNotes.map(n => ({ ...n, carried: true })) }
+      })
+    }
     const { data, error } = await sb.from('safety_measurements')
       .insert([{ type, site: selected.name, inspector: '', counts, index_pct: null, created_at: new Date().toISOString() }])
       .select()
@@ -405,6 +458,7 @@ export default function Dashboard() {
                   ['havainnot', `Havainnot${activeObs.length ? ` (${activeObs.length})` : ''}`],
                   ['tr', `TR-mittaus${trResult.total ? ` (${trResult.pct}%)` : ''}`],
                   ['mvr', `MVR-mittaus${mvrResult.total ? ` (${mvrResult.pct}%)` : ''}`],
+                  ['aliurakoitsijat', `Aliurakoitsijat${subcontractors.length ? ` (${subcontractors.length})` : ''}`],
                 ].map(([key, label]) => (
                   <button key={key} className={`kx-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}>{label}</button>
                 ))}
@@ -434,6 +488,7 @@ export default function Dashboard() {
                   <ObservationsPanel
                     obs={obs} showArchived={showArchivedObs} setShowArchived={setShowArchivedObs}
                     onChange={updateLocalObs} onSave={saveObs} onToggleArchive={toggleArchiveObs}
+                    subcontractors={subcontractors}
                   />
                 )}
 
@@ -444,6 +499,7 @@ export default function Dashboard() {
                     legalNote={tab === 'tr' ? TR_LEGAL_NOTE : MVR_LEGAL_NOTE}
                     rows={tab === 'tr' ? trRows : mvrRows}
                     editMeasure={editMeasure}
+                    subcontractors={subcontractors}
                     onStartEdit={startEditMeasure}
                     onCancelEdit={() => setEditMeasure(null)}
                     onBumpEdit={bumpEdit}
@@ -453,6 +509,15 @@ export default function Dashboard() {
                     onAddNote={addNoteEdit}
                     onUpdateNote={updateNoteEdit}
                     onRemoveNote={removeNoteEdit}
+                  />
+                )}
+
+                {tab === 'aliurakoitsijat' && (
+                  <SubcontractorsPanel
+                    active={subcontractors} archived={archivedSub}
+                    showArchived={showArchivedSub} setShowArchived={setShowArchivedSub}
+                    newName={newSubName} setNewName={setNewSubName}
+                    onAdd={addSubcontractor} onToggleArchive={toggleArchiveSub}
                   />
                 )}
               </div>
@@ -586,10 +651,12 @@ function WorksiteSummary({ obs }) {
 // Ei automaattitallennusta — muutokset kootaan korttiin ja tallennetaan
 // eksplisiittisesti "Tallenna muutokset" -napista, jotta hallintakäyttö
 // pysyy ennustettavana eikä lähetä kymmeniä pyyntöjä joka näppäimestä.
-function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSave, onToggleArchive }) {
+function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSave, onToggleArchive, subcontractors }) {
   const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
   const sevBg = { Kriittinen: 'rgba(214,48,48,0.1)', Huomio: 'rgba(245,168,0,0.12)', Info: 'rgba(26,138,80,0.1)' }
   const list = obs.filter(o => showArchived ? o.archived : !o.archived)
+  // Mitkä havaintojen Yritys-kentät ovat "kirjoita itse" -tilassa.
+  const [yritysCustom, setYritysCustom] = useState({})
   return (
     <div className="kx-obs-panel">
       <label className="kx-checkbox-row">
@@ -618,7 +685,25 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
             <div className="kx-field-row">
               <div className="kx-field">
                 <div className="kx-label">Yritys</div>
-                <input className="kx-input" value={o.yritys || ''} onChange={e => onChange(o.id, 'yritys', e.target.value)} />
+                {(subcontractors.length === 0 || yritysCustom[o.id] || (o.yritys && !subcontractors.some(s => s.name === o.yritys))) ? (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input className="kx-input" style={{ flex: 1 }} value={o.yritys || ''} onChange={e => onChange(o.id, 'yritys', e.target.value)} />
+                    {subcontractors.length > 0 && (
+                      <button className="kx-btn-ghost kx-btn-sm" onClick={() => { setYritysCustom(p => ({ ...p, [o.id]: false })); onChange(o.id, 'yritys', '') }}>↩</button>
+                    )}
+                  </div>
+                ) : (
+                  <select className="kx-input" value={o.yritys || ''}
+                    onChange={e => {
+                      const v = e.target.value
+                      if (v === '__other__') { setYritysCustom(p => ({ ...p, [o.id]: true })); onChange(o.id, 'yritys', '') }
+                      else onChange(o.id, 'yritys', v)
+                    }}>
+                    <option value="" disabled>Valitse…</option>
+                    {subcontractors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    <option value="__other__">✎ Muu (kirjoita itse)</option>
+                  </select>
+                )}
               </div>
               <div className="kx-field">
                 <div className="kx-label">Tarkastaja</div>
@@ -673,11 +758,13 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
 // viimeisin), jokaista voi arkistoida, ja "Muokkaa" avaa saman
 // laskuri-käyttöliittymän kuin kenttäsovelluksessa lukujen korjaamiseksi.
 // "＋ Uusi mittaus" luo tälle työmaalle kokonaan uuden tyhjän mittausrivin.
-function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onStartEdit, onCancelEdit, onBumpEdit, onSaveEdit, onArchive, onAddNew, onAddNote, onUpdateNote, onRemoveNote }) {
+function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, subcontractors, onStartEdit, onCancelEdit, onBumpEdit, onSaveEdit, onArchive, onAddNew, onAddNote, onUpdateNote, onRemoveNote }) {
   // Mikä kategorian puutelista on auki muokkausnäkymässä — pelkkä
   // näyttötila, nollautuu kun muokkaus suljetaan (uusi editMeasure.id).
   const [openNotes, setOpenNotes] = useState({})
   const toggleNotes = key => setOpenNotes(prev => ({ ...prev, [key]: !prev[key] }))
+  // Mitkä puutteiden Vastuuhenkilö-kentät ovat "kirjoita itse" -tilassa.
+  const [customVastuu, setCustomVastuu] = useState({})
   const editingThis = editMeasure && editMeasure.type === type
   return (
     <div className="kx-measure-panel">
@@ -744,17 +831,40 @@ function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onSt
                         {notesOpen && (
                           <div className="kx-note-list">
                             {notes.map(n => (
-                              <div key={n.id} className="kx-note-item">
+                              <div key={n.id} className="kx-note-item" style={n.carried && !n.korjattu ? { borderColor: '#f0c36d' } : undefined}>
                                 <div className="kx-note-row" style={{ justifyContent: 'space-between' }}>
-                                  <span className="kx-label kx-label-flat">Kuvaus puutteesta</span>
+                                  <span className="kx-label kx-label-flat">
+                                    Kuvaus puutteesta
+                                    {n.carried && !n.korjattu && (
+                                      <span style={{ marginLeft: 6, color: '#a67c00', textTransform: 'none', fontWeight: 700, fontSize: 10.5 }}>↩ edelliseltä kierrokselta</span>
+                                    )}
+                                  </span>
                                   <button className="kx-note-del" onClick={() => onRemoveNote(c.key, n.id)}>🗑</button>
                                 </div>
                                 <textarea className="kx-note-field" rows={2}
                                   placeholder="esim. Suojakaide puuttuu tasolta 2" value={n.desc}
                                   onChange={e => onUpdateNote(c.key, n.id, { desc: e.target.value })} />
                                 <span className="kx-label kx-label-flat">Vastuuhenkilö</span>
-                                <input className="kx-note-field" placeholder="Kuka korjaa" value={n.vastuuhenkilo}
-                                  onChange={e => onUpdateNote(c.key, n.id, { vastuuhenkilo: e.target.value })} />
+                                {(subcontractors.length === 0 || customVastuu[n.id] || (n.vastuuhenkilo && !subcontractors.some(s => s.name === n.vastuuhenkilo))) ? (
+                                  <div className="kx-note-row">
+                                    <input className="kx-note-field" placeholder="Kuka korjaa" value={n.vastuuhenkilo}
+                                      onChange={e => onUpdateNote(c.key, n.id, { vastuuhenkilo: e.target.value })} />
+                                    {subcontractors.length > 0 && (
+                                      <button className="kx-note-del" onClick={() => { setCustomVastuu(p => ({ ...p, [n.id]: false })); onUpdateNote(c.key, n.id, { vastuuhenkilo: '' }) }}>↩</button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <select className="kx-note-field" value={n.vastuuhenkilo}
+                                    onChange={e => {
+                                      const v = e.target.value
+                                      if (v === '__other__') { setCustomVastuu(p => ({ ...p, [n.id]: true })); onUpdateNote(c.key, n.id, { vastuuhenkilo: '' }) }
+                                      else onUpdateNote(c.key, n.id, { vastuuhenkilo: v })
+                                    }}>
+                                    <option value="" disabled>Valitse…</option>
+                                    {subcontractors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                    <option value="__other__">✎ Muu (kirjoita itse)</option>
+                                  </select>
+                                )}
                                 <div className="kx-note-row">
                                   <label className="kx-note-checklabel">
                                     <input type="checkbox" checked={n.korjattu}
@@ -782,6 +892,45 @@ function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, onSt
         })}
       </div>
       <div className="kx-legal-note">{legalNote}</div>
+    </div>
+  )
+}
+
+// Työmaan aliurakoitsijoiden hallinta: lisäys, lista, arkistointi/palautus.
+// Tätä listaa käytetään Havaintojen Yritys- ja puutteiden Vastuuhenkilö-
+// kenttien valintalistana koko Valvomossa ja kenttäsovelluksessa.
+function SubcontractorsPanel({ active, archived, showArchived, setShowArchived, newName, setNewName, onAdd, onToggleArchive }) {
+  const list = showArchived ? archived : active
+  return (
+    <div className="kx-obs-panel">
+      <div className="kx-measure-panel-head">
+        <div className="kx-label kx-label-flat">Aliurakoitsijat ({active.length})</div>
+      </div>
+      <div className="kx-note-row" style={{ marginBottom: 14 }}>
+        <input className="kx-input" style={{ flex: 1 }} placeholder="Uuden aliurakoitsijan/yrityksen nimi"
+          value={newName} onChange={e => setNewName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && onAdd()} />
+        <button className="kx-btn-primary" onClick={onAdd}>＋ Lisää</button>
+      </div>
+      <label className="kx-checkbox-row">
+        <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
+        Näytä arkistoidut
+      </label>
+      {list.length === 0 && (
+        <div className="kx-empty-note">{showArchived ? 'Ei arkistoituja aliurakoitsijoita.' : 'Ei vielä aliurakoitsijoita tällä työmaalla.'}</div>
+      )}
+      <div className="kx-measure-list">
+        {list.map(s => (
+          <div key={s.id} className="kx-card kx-measure-row">
+            <div className="kx-measure-row-head">
+              <div className="kx-measure-row-date">{s.name}</div>
+              <button className="kx-btn-ghost kx-btn-sm" onClick={() => onToggleArchive(s)}>
+                {s.archived ? '↺ Palauta' : '🗄 Arkistoi'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

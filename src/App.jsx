@@ -38,6 +38,7 @@ export default function App() {
   const [site, setSite] = useState('')
   const [inspector, setInspector] = useState('')
   const [worksites, setWorksites] = useState([])
+  const [subcontractors, setSubcontractors] = useState([])
   const [addingSite, setAddingSite] = useState(false)
   const [newSiteName, setNewSiteName] = useState('')
   const [obs, setObs] = useState([])
@@ -51,6 +52,9 @@ export default function App() {
   const [pdfBlob, setPdfBlob] = useState(null)
   const [pdfName, setPdfName] = useState('')
   const [pdfDownloaded, setPdfDownloaded] = useState(false)
+  // Mitkä havaintojen Yritys-kentät ovat "kirjoita itse" -tilassa (ohittaa
+  // valintalistan). Vain näyttötila, ei tallenneta.
+  const [obsYritysCustom, setObsYritysCustom] = useState({})
 
   const reportIdRef = useRef(uuid())
   const restoredRef = useRef(false)
@@ -87,6 +91,15 @@ export default function App() {
       if (!error && data) setWorksites(data)
     })
   }, [])
+
+  // Työmaan aliurakoitsijat (hallitaan Valvomosta) — käytetään Yritys- ja
+  // Vastuuhenkilö-kenttien valintalistana, ettei niitä tarvitse kirjoittaa
+  // uudelleen joka kerta.
+  useEffect(() => {
+    if (!site) { setSubcontractors([]); return }
+    sb.from('subcontractors').select('*').eq('site', site).eq('archived', false).order('name')
+      .then(({ data, error }) => { if (!error) setSubcontractors(data || []) })
+  }, [site])
 
   function applyDraft(siteName, d) {
     setSite(siteName)
@@ -327,13 +340,49 @@ export default function App() {
     }
   }
 
-  function newReport() {
+  // Hakee edellisen mittauksen (tr tai mvr) samalta työmaalta ja poimii
+  // sieltä puutteet, joita EI ole vielä merkitty korjatuiksi. Nämä siirtyvät
+  // automaattisesti uuden kierroksen pohjaksi (merkittynä carried:true),
+  // jotta mikään avoin puute ei pääse unohtumaan viikkojen välissä.
+  async function fetchOpenNotesFromPrevious(type, siteName) {
+    const categories = type === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES
+    const base = emptyCounts(categories)
+    if (!siteName) return base
+    try {
+      const { data, error } = await sb.from('safety_measurements')
+        .select('counts, created_at')
+        .eq('site', siteName).eq('type', type)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (error || !data?.[0]) return base
+      const prevCounts = data[0].counts || {}
+      categories.forEach(c => {
+        const prevNotes = (prevCounts[c.key]?.notes || []).filter(n => !n.korjattu && (n.desc || '').trim())
+        base[c.key] = { ...base[c.key], notes: prevNotes.map(n => ({ ...n, carried: true })) }
+      })
+      return base
+    } catch {
+      return base
+    }
+  }
+
+  async function newReport() {
     const hasContent = obs.length > 0 || overallIndex(trCounts, TR_CATEGORIES).total > 0 || overallIndex(mvrCounts, MVR_CATEGORIES).total > 0
     if (hasContent && !window.confirm(`Aloitetaanko uusi raportti työmaalle "${site}"? Nykyinen sisältö poistetaan tältä laitteelta (jo pilveen tallentunut säilyy Supabasessa ennallaan).`)) return
-    setObs([]); setTrCounts(emptyCounts(TR_CATEGORIES)); setMvrCounts(emptyCounts(MVR_CATEGORIES))
+    const currentSite = site
+    setObs([])
     setTrDbId(null); setMvrDbId(null)
     reportIdRef.current = uuid()
-    // Tallennus-effect kirjoittaa tyhjän tilan tämän työmaan kohtaan
+    // Tuodaan edellisen kierroksen avoimet puutteet pohjaksi — laskurit
+    // (oikein/väärin) alkavat silti aina nollasta, koska kyseessä on uusi
+    // fyysinen tarkastuskierros.
+    const [trBase, mvrBase] = await Promise.all([
+      fetchOpenNotesFromPrevious('tr', currentSite),
+      fetchOpenNotesFromPrevious('mvr', currentSite),
+    ])
+    setTrCounts(trBase)
+    setMvrCounts(mvrBase)
+    // Tallennus-effect kirjoittaa uuden tilan tämän työmaan kohtaan
     // kartassa automaattisesti heti kun obs/trCounts/mvrCounts päivittyvät.
   }
 
@@ -473,7 +522,26 @@ export default function App() {
                   </div>
                   <div>
                     <div style={labelStyle}>Yritys</div>
-                    <input style={inputStyle} placeholder="Mikä yritys / aliurakoitsija" value={o.yritys} onChange={e => updateObs(o.id, 'yritys', e.target.value)} />
+                    {(subcontractors.length === 0 || obsYritysCustom[o.id] || (o.yritys && !subcontractors.some(s => s.name === o.yritys))) ? (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input style={{ ...inputStyle, flex: 1 }} placeholder="Mikä yritys / aliurakoitsija" value={o.yritys} onChange={e => updateObs(o.id, 'yritys', e.target.value)} />
+                        {subcontractors.length > 0 && (
+                          <button onClick={() => { setObsYritysCustom(p => ({ ...p, [o.id]: false })); updateObs(o.id, 'yritys', '') }}
+                            title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 8, border: '1px solid #d3d6e0', background: '#eef0f5', color: '#6a7086', fontSize: 12 }}>↩</button>
+                        )}
+                      </div>
+                    ) : (
+                      <select style={selectStyle} value={o.yritys}
+                        onChange={e => {
+                          const v = e.target.value
+                          if (v === '__other__') { setObsYritysCustom(p => ({ ...p, [o.id]: true })); updateObs(o.id, 'yritys', '') }
+                          else updateObs(o.id, 'yritys', v)
+                        }}>
+                        <option value="" disabled>Valitse…</option>
+                        {subcontractors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                        <option value="__other__">✎ Muu (kirjoita itse)</option>
+                      </select>
+                    )}
                   </div>
                   <div>
                     <div style={labelStyle}>Vakavuus</div>
@@ -529,6 +597,7 @@ export default function App() {
             categories={tab === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES}
             counts={tab === 'tr' ? trCounts : mvrCounts}
             legalNote={tab === 'tr' ? TR_LEGAL_NOTE : MVR_LEGAL_NOTE}
+            subcontractors={subcontractors}
             onBump={bump}
             onReset={resetMeasurement}
             onAddNote={handleAddNote}
@@ -585,12 +654,14 @@ export default function App() {
 // Yhden TR- tai MVR-mittauksen näkymä: jokaiselle havaintoluokalle kaksi
 // isoa "tukkimiehen kirjanpito" -tyylistä laskuripainiketta (Oikein/Väärin),
 // ja ylhäällä koko mittauksen kokonaisindeksi joka päivittyy heti.
-function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset, onAddNote, onUpdateNote, onRemoveNote }) {
+function MeasurementTab({ type, categories, counts, legalNote, subcontractors, onBump, onReset, onAddNote, onUpdateNote, onRemoveNote }) {
   const { oikein, vaarin, total, pct } = overallIndex(counts, categories)
   const color = indexColor(pct)
   // Mikä kategorian puutelista on auki — pelkkä näyttötila, ei tallenneta.
   const [openNotes, setOpenNotes] = useState({})
   const toggleNotes = key => setOpenNotes(prev => ({ ...prev, [key]: !prev[key] }))
+  // Mitkä puutteiden Vastuuhenkilö-kentät ovat "kirjoita itse" -tilassa.
+  const [customVastuu, setCustomVastuu] = useState({})
 
   return (
     <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -605,6 +676,12 @@ function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset, 
         </div>
         <div style={{ fontSize: 30, fontWeight: 800, color }}>{pct == null ? '–' : `${pct}%`}</div>
       </div>
+
+      {categories.some(c => (counts[c.key]?.notes || []).some(n => n.carried && !n.korjattu)) && (
+        <div style={{ background: '#fff3cd', border: '1px solid #f0c36d', borderRadius: 10, padding: '10px 12px', fontSize: 12.5, color: '#7a5b00', lineHeight: 1.5 }}>
+          ⚠ Edelliseltä kierrokselta on avoimia puutteita tuotu tähän mittaukseen — tarkista kunkin kategorian Puutteet-listasta, onko ne korjattu.
+        </div>
+      )}
 
       {categories.map(c => {
         const cnt = counts[c.key] || { oikein: 0, vaarin: 0, notes: [] }
@@ -644,9 +721,14 @@ function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset, 
             {notesOpen && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, paddingTop: 10, borderTop: '1px solid #eef0f5' }}>
                 {notes.map(n => (
-                  <div key={n.id} style={{ background: '#f9fafc', border: '1px solid #eef0f5', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div key={n.id} style={{ background: '#f9fafc', border: n.carried && !n.korjattu ? '1px solid #f0c36d' : '1px solid #eef0f5', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ ...labelStyle, marginBottom: 0 }}>Kuvaus puutteesta</div>
+                      <div style={{ ...labelStyle, marginBottom: 0 }}>
+                        Kuvaus puutteesta
+                        {n.carried && !n.korjattu && (
+                          <span style={{ marginLeft: 6, color: '#a67c00', textTransform: 'none', fontWeight: 700, fontSize: 10.5 }}>↩ edelliseltä kierrokselta</span>
+                        )}
+                      </div>
                       <button onClick={() => onRemoveNote(type, c.key, n.id)} style={{ background: 'none', border: 'none', color: '#6a7086', fontSize: 15 }}>🗑</button>
                     </div>
                     <textarea style={{ ...selectStyle, resize: 'none', minHeight: 44, lineHeight: 1.4 }}
@@ -654,8 +736,27 @@ function MeasurementTab({ type, categories, counts, legalNote, onBump, onReset, 
                       onChange={e => onUpdateNote(type, c.key, n.id, { desc: e.target.value })} />
                     <div>
                       <div style={labelStyle}>Vastuuhenkilö</div>
-                      <input style={inputStyle} placeholder="Kuka korjaa" value={n.vastuuhenkilo}
-                        onChange={e => onUpdateNote(type, c.key, n.id, { vastuuhenkilo: e.target.value })} />
+                      {(subcontractors.length === 0 || customVastuu[n.id] || (n.vastuuhenkilo && !subcontractors.some(s => s.name === n.vastuuhenkilo))) ? (
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input style={{ ...inputStyle, flex: 1 }} placeholder="Kuka korjaa" value={n.vastuuhenkilo}
+                            onChange={e => onUpdateNote(type, c.key, n.id, { vastuuhenkilo: e.target.value })} />
+                          {subcontractors.length > 0 && (
+                            <button onClick={() => { setCustomVastuu(p => ({ ...p, [n.id]: false })); onUpdateNote(type, c.key, n.id, { vastuuhenkilo: '' }) }}
+                              title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 8, border: '1px solid #d3d6e0', background: '#eef0f5', color: '#6a7086', fontSize: 12 }}>↩</button>
+                          )}
+                        </div>
+                      ) : (
+                        <select style={selectStyle} value={n.vastuuhenkilo}
+                          onChange={e => {
+                            const v = e.target.value
+                            if (v === '__other__') { setCustomVastuu(p => ({ ...p, [n.id]: true })); onUpdateNote(type, c.key, n.id, { vastuuhenkilo: '' }) }
+                            else onUpdateNote(type, c.key, n.id, { vastuuhenkilo: v })
+                          }}>
+                          <option value="" disabled>Valitse…</option>
+                          {subcontractors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                          <option value="__other__">✎ Muu (kirjoita itse)</option>
+                        </select>
+                      )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#14183a' }}>
