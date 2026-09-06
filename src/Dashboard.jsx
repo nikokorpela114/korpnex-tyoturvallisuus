@@ -300,7 +300,7 @@ export default function Dashboard() {
       {/* Topbar */}
       <div className="kx-topbar">
         <div className="kx-brand">
-          <div className="kx-brand-mark">K</div>
+          <img className="kx-brand-mark" src="/korpnex-icon.png" alt="Korpnex" />
           <span className="kx-brand-name">KORPNEX</span>
           <span className="kx-brand-sub">· Valvomo</span>
         </div>
@@ -733,7 +733,7 @@ const DASHBOARD_CSS = `
 .kx-dashboard * { box-sizing: border-box; }
 .kx-topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: #17275c; position: sticky; top: 0; z-index: 20; }
 .kx-brand { display: flex; align-items: center; gap: 8px; }
-.kx-brand-mark { width: 30px; height: 30px; border-radius: 8px; background: #223a8c; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #c7cbd6; font-size: 15px; }
+.kx-brand-mark { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; display: block; }
 .kx-brand-name { font-size: 17px; font-weight: 800; color: #fff; letter-spacing: 0.5px; }
 .kx-brand-sub { font-size: 11px; color: rgba(255,255,255,0.55); font-weight: 500; margin-left: 2px; }
 .kx-topbar-actions { display: flex; align-items: center; gap: 8px; }

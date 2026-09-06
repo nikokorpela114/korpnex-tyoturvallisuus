@@ -361,7 +361,7 @@ export default function App() {
       {/* Topbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 10px', background: '#17275c', position: 'sticky', top: 0, zIndex: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: '#223a8c', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#c7cbd6', fontSize: 15 }}>K</div>
+          <img src="/korpnex-icon.png" alt="Korpnex" style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'cover', display: 'block' }} />
           <span style={{ fontSize: 17, fontWeight: 800, color: 'white', letterSpacing: 0.5 }}>KORPNEX</span>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', fontWeight: 500, marginLeft: 2 }}>· Työturvallisuus</span>
         </div>
