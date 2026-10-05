@@ -5,6 +5,9 @@ import {
   emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, buildReportPDF, summarizeObservations,
   addNote, updateNote, removeNote,
 } from './shared.js'
+import ClientsPanel, { CLIENTS_CSS } from './ClientsPanel.jsx'
+import { ObsCard, AckAction, ReviewAction, Lightbox, StatusTag, overdue, OBS_REVIEW_CSS } from './ObsReview.jsx'
+import { usePhotoUrls, photoAsDataUrl } from './photos.js'
 
 // Valvomo (?valvomo) — Korpnexin hallintapaneeli, tarkoitettu käytettäväksi
 // tietokoneella. Täältä hallitaan työmaita (lisäys / nimeäminen / arkistointi),
@@ -17,10 +20,20 @@ import {
 // piilotetaan listoilta (archived=true). Näin vanhat PDF-raportit ja koko
 // historia säilyvät, vaikka työmaan tai havainnon arkistoisi vahingossa.
 //
-// HUOM: valokuvat eivät synkronoidu pilveen (vain laitteen omalla luonnoksella
-// kenttäsovelluksessa) — Valvomo ja sen PDF-vienti eivät siis koskaan
-// sisällä kuvia, vain tekstimuotoiset havainnot ja mittaustulokset.
-export default function Dashboard() {
+// Sama näkymä toimii kahdessa roolissa (profile.role):
+//   konsultti → täysi Valvomo + Odottaa tarkastusta + Asiakkaat
+//   asiakas   → asiakasportaali: omat työmaat luku-tilassa, havaintojen
+//               kuittaus korjatuksi. Tietokannan RLS rajaa näkyvyyden, tämä
+//               tiedosto vain piilottaa muokkaustoiminnot.
+// Kuvat tulevat Storagesta (ks. photos.js).
+export default function Dashboard({ profile, logout }) {
+  const isC = profile?.role === 'konsultti'
+  const [view, setView] = useState('tyomaat') // tyomaat | tarkastus | asiakkaat (konsultti)
+  const [clients, setClients] = useState([])
+  const [reviewList, setReviewList] = useState([])
+  const [lightbox, setLightbox] = useState(null)
+  const [obsFilter, setObsFilter] = useState('avoimet')
+  const [sitesLoaded, setSitesLoaded] = useState(false)
   const [worksites, setWorksites] = useState([])
   const [archivedSites, setArchivedSites] = useState([])
   const [showArchivedSites, setShowArchivedSites] = useState(false)
@@ -76,7 +89,23 @@ export default function Dashboard() {
       console.error('loadWorksites failed:', activeRes.error)
     }
     if (!archRes.error) setArchivedSites(archRes.data || [])
+    setSitesLoaded(true)
   }, [])
+
+  const loadClients = useCallback(async () => {
+    const { data } = await sb.from('clients').select('*').order('name')
+    setClients(data || [])
+  }, [])
+  useEffect(() => { loadClients() }, [loadClients])
+
+  // Konsultti: kaikkien työmaiden asiakkaan kuittaamat havainnot
+  const loadReview = useCallback(async () => {
+    if (!isC) return
+    const { data } = await sb.from('safety_observations').select('*')
+      .eq('status', 'kuitattu').eq('archived', false).order('ack_at', { ascending: true })
+    setReviewList(data || [])
+  }, [isC])
+  useEffect(() => { loadReview() }, [loadReview])
 
   useEffect(() => { loadWorksites() }, [loadWorksites])
 
@@ -93,7 +122,7 @@ export default function Dashboard() {
         sb.from('subcontractors').select('*').eq('site', siteName).eq('archived', true).order('name'),
       ])
       if (obsRes.error || trRes.error || mvrRes.error) throw (obsRes.error || trRes.error || mvrRes.error)
-      setObs(obsRes.data || [])
+      setObs((obsRes.data || []).map(o => ({ ...o, _origStatus: o.status })))
       setTrRows(trRes.data || [])
       setMvrRows(mvrRes.data || [])
       setSubcontractors(subRes.data || [])
@@ -110,7 +139,21 @@ export default function Dashboard() {
 
   function refresh() {
     loadWorksites()
+    loadReview()
     if (selected) loadSite(selected.name)
+  }
+
+  async function setWorksiteClient(clientId) {
+    if (!selected) return
+    const { error } = await sb.from('worksites').update({ client_id: clientId || null }).eq('id', selected.id)
+    if (error) { showToast('⚠ Tallennus epäonnistui'); return }
+    showToast(clientId ? '✓ Työmaa liitetty asiakkaalle' : 'Työmaa irrotettu asiakkaasta')
+    loadWorksites()
+  }
+
+  function obsUpdated(o) {
+    setObs(prev => prev.map(x => x.id === o.id ? { ...x, ...o } : x))
+    setReviewList(prev => prev.filter(x => x.id !== o.id || o.status === 'kuitattu'))
   }
 
   // --- Työmaiden hallinta ---
@@ -169,11 +212,18 @@ export default function Dashboard() {
   }
 
   async function saveObs(o) {
-    const { error } = await sb.from('safety_observations')
-      .update({ havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note, status: o.status })
-      .eq('id', o.id)
+    const patch = { havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note, status: o.status, due_date: o.due_date || null }
+    const before = obs.find(x => x.id === o.id)
+    if (o.status === 'korjattu' && !o.fixed_at) {
+      patch.fixed_at = new Date().toISOString(); patch.fixed_by_name = profile?.name || null
+    }
+    if (o.status === 'avoin' && before?._origStatus && before._origStatus !== 'avoin') {
+      Object.assign(patch, { fixed_at: null, fixed_by_name: null, fix_photo: null, ack_at: null, ack_by: null, ack_by_name: null, ack_comment: null, ack_photo: null })
+    }
+    const { error } = await sb.from('safety_observations').update(patch).eq('id', o.id)
     if (!error) {
-      setObs(prev => prev.map(x => x.id === o.id ? { ...x, _dirty: false } : x))
+      setObs(prev => prev.map(x => x.id === o.id ? { ...x, ...patch, _dirty: false, _origStatus: patch.status } : x))
+      loadReview()
       showToast('✓ Havainto tallennettu')
     } else {
       console.error('saveObs failed:', error)
@@ -343,10 +393,17 @@ export default function Dashboard() {
       alert('Tällä työmaalla ei ole vielä sisältöä raporttiin.')
       return
     }
-    const pdfObs = activeObs.map(o => ({
-      havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note, status: o.status,
-      createdAt: o.created_at, photos: [],
-    }))
+    showToast('⏳ Kootaan raporttia kuvineen…')
+    const pdfObs = []
+    for (const o of activeObs) {
+      const photos = []
+      for (const p of (o.photos || []).slice(0, 2)) {
+        const src = await photoAsDataUrl(p.path); if (src) photos.push({ src, label: 'Ennen', maxH: 75 })
+      }
+      if (o.fix_photo) { const src = await photoAsDataUrl(o.fix_photo); if (src) photos.push({ src, label: 'Jälkeen', maxH: 75 }) }
+      else if (o.ack_photo) { const src = await photoAsDataUrl(o.ack_photo); if (src) photos.push({ src, label: 'Asiakkaan kuva', maxH: 75 }) }
+      pdfObs.push({ ...o, createdAt: o.created_at, photos })
+    }
     const { blob, filename } = await buildReportPDF({
       site: selected.name,
       inspector: distinctInspectors,
@@ -375,31 +432,86 @@ export default function Dashboard() {
   const trResult = trLatest ? overallIndex(trLatest.counts, TR_CATEGORIES) : { total: 0, pct: null }
   const mvrResult = mvrLatest ? overallIndex(mvrLatest.counts, MVR_CATEGORIES) : { total: 0, pct: null }
 
+  const myClient = !isC ? clients.find(c => c.id === profile?.client_id) : null
+  const selectedClient = clients.find(c => c.id === selected?.client_id)
+  const openCount = activeObs.filter(o => o.status === 'avoin').length
+  const ackCount = activeObs.filter(o => o.status === 'kuitattu').length
+  const fixedCount = activeObs.filter(o => o.status === 'korjattu').length
+  const lateCount = activeObs.filter(overdue).length
+  const filteredObs = activeObs.filter(o =>
+    obsFilter === 'kaikki' ? true
+      : obsFilter === 'avoimet' ? o.status === 'avoin'
+      : obsFilter === 'odottaa' ? o.status === 'kuitattu'
+      : o.status === 'korjattu')
+  const photoPaths = (view === 'tarkastus' ? reviewList : obs).flatMap(o => [...(o.photos || []).map(p => p.path), o.ack_photo, o.fix_photo])
+  const urls = usePhotoUrls(photoPaths)
+
   return (
     <div className="kx-dashboard">
-      <style>{DASHBOARD_CSS}</style>
+      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS}</style>
 
       {/* Topbar */}
       <div className="kx-topbar">
         <div className="kx-brand">
           <img className="kx-brand-mark" src="/korpnex-icon.png" alt="Korpnex" />
           <span className="kx-brand-name">KORPNEX</span>
-          <span className="kx-brand-sub">· Valvomo</span>
+          <span className="kx-brand-sub">· {isC ? 'Valvomo' : (myClient?.name || 'Asiakasportaali')}</span>
         </div>
         <div className="kx-topbar-actions">
-          <a className="kx-btn-ghost kx-btn-onbrand" href="./" target="_blank" rel="noreferrer">📱 Kenttäsovellus</a>
+          {isC && (
+            <div className="kx-viewswitch">
+              <button className={view === 'tyomaat' ? 'active' : ''} onClick={() => setView('tyomaat')}>Työmaat</button>
+              <button className={view === 'tarkastus' ? 'active' : ''} onClick={() => { setView('tarkastus'); loadReview() }}>
+                Odottaa tarkastusta{reviewList.length > 0 && <span className="kx-count-pill">{reviewList.length}</span>}
+              </button>
+              <button className={view === 'asiakkaat' ? 'active' : ''} onClick={() => setView('asiakkaat')}>Asiakkaat</button>
+            </div>
+          )}
+          {isC && <a className="kx-btn-ghost kx-btn-onbrand kx-hide-mobile" href="/">📱 Kenttä</a>}
+          <button className="kx-btn-ghost kx-btn-onbrand" onClick={logout} title={profile?.email}>⎋ Ulos</button>
         </div>
       </div>
 
+      {isC && view === 'asiakkaat' && (
+        <div className="kx-shell kx-shell-single">
+          <main className="kx-main">
+            <ClientsPanel showToast={showToast} onSitesChanged={() => { loadWorksites(); loadClients() }} />
+          </main>
+        </div>
+      )}
+
+      {isC && view === 'tarkastus' && (
+        <div className="kx-shell kx-shell-single">
+          <main className="kx-main">
+            <div className="kx-main-head">
+              <div>
+                <div className="kx-main-title">Odottaa tarkastusta</div>
+                <div className="kx-main-sub">Asiakkaiden korjatuiksi kuittaamat puutteet kaikilta työmailta. Tarkista paikan päällä tai kuvasta.</div>
+              </div>
+              <button className="kx-btn-ghost" onClick={loadReview}>🔄 Päivitä</button>
+            </div>
+            {reviewList.length === 0 && <div className="kx-empty-note">✅ Ei tarkastettavaa.</div>}
+            <div className="kx-obs-grid">
+              {reviewList.map(o => (
+                <ObsCard key={o.id} o={o} urls={urls} showSite onOpenPhoto={setLightbox}>
+                  <ReviewAction o={o} reviewerName={profile?.name} onDone={u => { obsUpdated(u); showToast(u.status === 'korjattu' ? '✓ Merkitty korjatuksi' : '↩ Palautettu avoimeksi') }} />
+                </ObsCard>
+              ))}
+            </div>
+          </main>
+        </div>
+      )}
+
+      {view === 'tyomaat' && (
       <div className="kx-shell">
-        {/* Sidebar: työmaiden hallinta */}
+        {/* Sidebar: työmaat */}
         <aside className="kx-sidebar">
-          <div className="kx-sidebar-head">Työmaat</div>
+          <div className="kx-sidebar-head">{isC ? 'Työmaat' : 'Työmaasi'}</div>
           <div className="kx-site-list">
-            {worksites.length === 0 && <div className="kx-empty-note">Ei vielä työmaita.</div>}
+            {worksites.length === 0 && <div className="kx-empty-note">{isC ? 'Ei vielä työmaita.' : 'Työmaita ei ole vielä liitetty tunnukseesi.'}</div>}
             {worksites.map(w => (
               <div key={w.id} className={`kx-site-row ${selected?.id === w.id ? 'active' : ''}`}>
-                {editingSiteId === w.id ? (
+                {isC && editingSiteId === w.id ? (
                   <div className="kx-site-edit">
                     <input autoFocus className="kx-input kx-input-sm" value={editSiteName}
                       onChange={e => setEditSiteName(e.target.value)}
@@ -409,18 +521,23 @@ export default function Dashboard() {
                   </div>
                 ) : (
                   <>
-                    <button className="kx-site-name" onClick={() => setSelected(w)}>{w.name}</button>
-                    <div className="kx-site-actions">
-                      <button className="kx-icon-btn" title="Nimeä uudelleen" onClick={() => { setEditingSiteId(w.id); setEditSiteName(w.name) }}>✏️</button>
-                      <button className="kx-icon-btn kx-icon-btn-danger" title="Arkistoi työmaa" onClick={() => archiveWorksite(w)}>🗄 Arkistoi</button>
-                    </div>
+                    <button className="kx-site-name" onClick={() => setSelected(w)}>
+                      {w.name}
+                      {isC && <span className="kx-site-client">{clients.find(c => c.id === w.client_id)?.name || 'ei asiakasta'}</span>}
+                    </button>
+                    {isC && (
+                      <div className="kx-site-actions">
+                        <button className="kx-icon-btn" title="Nimeä uudelleen" onClick={() => { setEditingSiteId(w.id); setEditSiteName(w.name) }}>✏️</button>
+                        <button className="kx-icon-btn kx-icon-btn-danger" title="Arkistoi työmaa" onClick={() => archiveWorksite(w)}>🗄</button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
             ))}
           </div>
 
-          {!addingSite ? (
+          {isC && (!addingSite ? (
             <button className="kx-add-site-btn" onClick={() => { setAddingSite(true); setNewSiteName('') }}>＋ Uusi työmaa</button>
           ) : (
             <div className="kx-site-edit kx-add-row">
@@ -430,38 +547,57 @@ export default function Dashboard() {
               <button className="kx-icon-btn" title="Lisää" onClick={addWorksite}>✓</button>
               <button className="kx-icon-btn" title="Peruuta" onClick={() => setAddingSite(false)}>✕</button>
             </div>
-          )}
+          ))}
 
-          <button className="kx-archived-toggle" onClick={() => setShowArchivedSites(s => !s)}>
-            {showArchivedSites ? '▾' : '▸'} Arkistoidut työmaat {archivedSites.length ? `(${archivedSites.length})` : ''}
-          </button>
-          {showArchivedSites && (
-            <div className="kx-archived-list">
-              {archivedSites.length === 0 && <div className="kx-empty-note">Ei arkistoituja työmaita.</div>}
-              {archivedSites.map(w => (
-                <div key={w.id} className="kx-site-row">
-                  <span className="kx-site-name-static">{w.name}</span>
-                  <button className="kx-icon-btn" title="Palauta" onClick={() => unarchiveWorksite(w)}>↺</button>
+          {isC && (
+            <>
+              <button className="kx-archived-toggle" onClick={() => setShowArchivedSites(s => !s)}>
+                {showArchivedSites ? '▾' : '▸'} Arkistoidut työmaat {archivedSites.length ? `(${archivedSites.length})` : ''}
+              </button>
+              {showArchivedSites && (
+                <div className="kx-archived-list">
+                  {archivedSites.length === 0 && <div className="kx-empty-note">Ei arkistoituja työmaita.</div>}
+                  {archivedSites.map(w => (
+                    <div key={w.id} className="kx-site-row">
+                      <span className="kx-site-name-static">{w.name}</span>
+                      <button className="kx-icon-btn" title="Palauta" onClick={() => unarchiveWorksite(w)}>↺</button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </aside>
 
         {/* Pääsisältö: valitun työmaan tiedot */}
         <main className="kx-main">
           {!selected ? (
-            <div className="kx-empty-main">📍 Lisää tai valitse työmaa vasemmalta aloittaaksesi.</div>
+            <div className="kx-empty-main">
+              {isC ? '📍 Lisää tai valitse työmaa vasemmalta aloittaaksesi.'
+                : sitesLoaded ? <>👋 Tervetuloa!<br /><br />Korpnex liittää työmaasi tunnukseesi ensimmäisen tarkastuksen yhteydessä. Sen jälkeen näet täältä havainnot, mittaukset ja avoimet puutteet heti tarkastuksen jälkeen.</> : 'Ladataan…'}
+            </div>
           ) : (
             <>
               <div className="kx-main-head">
                 <div>
                   <div className="kx-main-title">{selected.name}</div>
-                  <div className="kx-main-sub">{loading ? 'Ladataan…' : `${activeObs.length} havaintoa`}</div>
+                  <div className="kx-main-sub">
+                    {loading ? 'Ladataan…' : `${activeObs.length} havaintoa · ${openCount} avoinna${ackCount ? ` · ${ackCount} odottaa tarkastusta` : ''}`}
+                  </div>
+                  {isC && (
+                    <div className="kx-client-select">
+                      Asiakas:
+                      <select className="kx-input kx-input-sm" value={selected.client_id || ''} onChange={e => setWorksiteClient(e.target.value)}>
+                        <option value="">— ei asiakasta (näkyy vain Korpnexille) —</option>
+                        {clients.filter(c => !c.archived || c.id === selected.client_id).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                      {!selectedClient && <span className="kx-hint">Liitä asiakas, niin sen käyttäjät näkevät työmaan.</span>}
+                    </div>
+                  )}
                 </div>
                 <div className="kx-main-head-actions">
                   <button className="kx-btn-ghost" onClick={refresh}>🔄 Päivitä</button>
-                  <button className="kx-btn-primary" onClick={exportPDF}>📄 Vie PDF-raportti</button>
+                  <button className="kx-btn-primary" onClick={exportPDF}>📄 PDF</button>
                 </div>
               </div>
 
@@ -473,7 +609,7 @@ export default function Dashboard() {
                   ['havainnot', `Havainnot${activeObs.length ? ` (${activeObs.length})` : ''}`],
                   ['tr', `TR-mittaus${trResult.total ? ` (${trResult.pct}%)` : ''}`],
                   ['mvr', `MVR-mittaus${mvrResult.total ? ` (${mvrResult.pct}%)` : ''}`],
-                  ['aliurakoitsijat', `Aliurakoitsijat${subcontractors.length ? ` (${subcontractors.length})` : ''}`],
+                  ...(isC ? [['aliurakoitsijat', `Aliurakoitsijat${subcontractors.length ? ` (${subcontractors.length})` : ''}`]] : []),
                 ].map(([key, label]) => (
                   <button key={key} className={`kx-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}>{label}</button>
                 ))}
@@ -482,8 +618,31 @@ export default function Dashboard() {
               <div className="kx-tab-content">
                 {tab === 'yhteenveto' && (
                   <div className="kx-overview-grid">
+                    <div className="kx-card kx-kpis">
+                      <button className="kx-kpi" onClick={() => { setTab('havainnot'); setObsFilter('avoimet') }}>
+                        <span className="kx-kpi-num" style={{ color: openCount ? '#d63030' : '#1a8a50' }}>{openCount}</span>
+                        <span className="kx-kpi-label">Avoimet puutteet</span>
+                      </button>
+                      <button className="kx-kpi" onClick={() => { setTab('havainnot'); setObsFilter('odottaa') }}>
+                        <span className="kx-kpi-num" style={{ color: '#d07800' }}>{ackCount}</span>
+                        <span className="kx-kpi-label">Odottaa tarkastusta</span>
+                      </button>
+                      <button className="kx-kpi" onClick={() => { setTab('havainnot'); setObsFilter('korjatut') }}>
+                        <span className="kx-kpi-num" style={{ color: '#1a8a50' }}>{fixedCount}</span>
+                        <span className="kx-kpi-label">Korjattu</span>
+                      </button>
+                      <div className="kx-kpi">
+                        <span className="kx-kpi-num" style={{ color: lateCount ? '#d63030' : '#9aa2c0' }}>{lateCount}</span>
+                        <span className="kx-kpi-label">Myöhässä</span>
+                      </div>
+                      <div className="kx-kpi">
+                        <span className="kx-kpi-num" style={{ color: '#17275c' }}>{avgFixDays(activeObs) ?? '–'}</span>
+                        <span className="kx-kpi-label">Korjausaika, pv (ka.)</span>
+                      </div>
+                    </div>
                     <MeasurementSummary title="TR-mittaus" categories={TR_CATEGORIES} row={trLatest} />
                     <MeasurementSummary title="MVR-mittaus" categories={MVR_CATEGORIES} row={mvrLatest} />
+                    <TrendCard trRows={trRows} mvrRows={mvrRows} />
                     <WorksiteSummary obs={activeObs} />
                     <div className="kx-card kx-recent-obs">
                       <div className="kx-card-title">Viimeisimmät havainnot</div>
@@ -492,6 +651,7 @@ export default function Dashboard() {
                         <div key={o.id} className="kx-recent-obs-row">
                           <span className={`kx-sev-dot sev-${o.sev}`} />
                           <span className="kx-recent-obs-text">{o.havainto || '(ei kuvausta)'}</span>
+                          <StatusTag status={o.status} />
                           {o.created_at && <span className="kx-recent-obs-date">{new Date(o.created_at).toLocaleDateString('fi-FI')}</span>}
                         </div>
                       ))}
@@ -499,15 +659,33 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {tab === 'havainnot' && (
+                {tab === 'havainnot' && isC && (
                   <ObservationsPanel
                     obs={obs} showArchived={showArchivedObs} setShowArchived={setShowArchivedObs}
                     onChange={updateLocalObs} onSave={saveObs} onToggleArchive={toggleArchiveObs}
-                    subcontractors={subcontractors}
+                    subcontractors={subcontractors} urls={urls} onOpenPhoto={setLightbox}
                   />
                 )}
 
-                {(tab === 'tr' || tab === 'mvr') && (
+                {tab === 'havainnot' && !isC && (
+                  <div>
+                    <div className="kx-filter-row">
+                      {[['avoimet', `Avoimet (${openCount})`], ['odottaa', `Odottaa tarkastusta (${ackCount})`], ['korjatut', `Korjatut (${fixedCount})`], ['kaikki', `Kaikki (${activeObs.length})`]].map(([k, l]) => (
+                        <button key={k} className={`kx-filter ${obsFilter === k ? 'active' : ''}`} onClick={() => setObsFilter(k)}>{l}</button>
+                      ))}
+                    </div>
+                    {filteredObs.length === 0 && <div className="kx-empty-note">{obsFilter === 'avoimet' ? '✅ Ei avoimia puutteita.' : 'Ei havaintoja.'}</div>}
+                    <div className="kx-obs-grid">
+                      {filteredObs.map(o => (
+                        <ObsCard key={o.id} o={o} urls={urls} onOpenPhoto={setLightbox}>
+                          <AckAction o={o} onDone={() => { showToast('✓ Kuitattu — Korpnex tarkistaa korjauksen'); loadSite(selected.name) }} />
+                        </ObsCard>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(tab === 'tr' || tab === 'mvr') && isC && (
                   <MeasurementPanel
                     type={tab}
                     categories={tab === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES}
@@ -527,7 +705,16 @@ export default function Dashboard() {
                   />
                 )}
 
-                {tab === 'aliurakoitsijat' && (
+                {(tab === 'tr' || tab === 'mvr') && !isC && (
+                  <MeasurementHistory
+                    type={tab}
+                    categories={tab === 'tr' ? TR_CATEGORIES : MVR_CATEGORIES}
+                    legalNote={tab === 'tr' ? TR_LEGAL_NOTE : MVR_LEGAL_NOTE}
+                    rows={tab === 'tr' ? trRows : mvrRows}
+                  />
+                )}
+
+                {tab === 'aliurakoitsijat' && isC && (
                   <SubcontractorsPanel
                     active={subcontractors} archived={archivedSub}
                     showArchived={showArchivedSub} setShowArchived={setShowArchivedSub}
@@ -540,7 +727,9 @@ export default function Dashboard() {
           )}
         </main>
       </div>
+      )}
 
+      <Lightbox url={lightbox} onClose={() => setLightbox(null)} />
       {toast && <div className="kx-toast">{toast}</div>}
 
       {/* PDF overlay */}
@@ -563,6 +752,121 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+
+// Keskimääräinen korjausaika päivinä (merkintä → varmistettu korjaus).
+function avgFixDays(obs) {
+  const d = obs.filter(o => o.status === 'korjattu' && o.fixed_at && o.created_at)
+    .map(o => (new Date(o.fixed_at) - new Date(o.created_at)) / 864e5)
+  if (!d.length) return null
+  return (d.reduce((a, b) => a + b, 0) / d.length).toFixed(1).replace('.', ',')
+}
+
+// TR-/MVR-indeksin kehitys ajan yli (yksinkertainen SVG-viivakaavio).
+function TrendCard({ trRows, mvrRows }) {
+  const series = [
+    { key: 'TR', color: '#223a8c', pts: trRows.filter(r => r.index_pct != null).map(r => ({ t: new Date(r.created_at).getTime(), v: Number(r.index_pct) })).reverse() },
+    { key: 'MVR', color: '#20a0c8', pts: mvrRows.filter(r => r.index_pct != null).map(r => ({ t: new Date(r.created_at).getTime(), v: Number(r.index_pct) })).reverse() },
+  ].filter(s => s.pts.length)
+  const all = series.flatMap(s => s.pts)
+  const W = 900, H = 210, P = { l: 34, r: 14, t: 12, b: 26 }
+  let body
+  if (all.length < 2) {
+    body = <div className="kx-empty-note">Kaavio näkyy, kun mittauksia on vähintään kaksi.</div>
+  } else {
+    const t0 = Math.min(...all.map(p => p.t)), t1 = Math.max(...all.map(p => p.t)) || t0 + 1
+    const vMin = Math.max(0, Math.floor((Math.min(...all.map(p => p.v)) - 5) / 10) * 10)
+    const x = t => P.l + (t1 === t0 ? 0.5 : (t - t0) / (t1 - t0)) * (W - P.l - P.r)
+    const y = v => P.t + (1 - (v - vMin) / (100 - vMin)) * (H - P.t - P.b)
+    const ticks = []; for (let v = vMin; v <= 100; v += vMin >= 60 ? 10 : 20) ticks.push(v)
+    body = (
+      <svg viewBox={`0 0 ${W} ${H}`} className="kx-trend-svg">
+        {ticks.map(v => (
+          <g key={v}>
+            <line x1={P.l} x2={W - P.r} y1={y(v)} y2={y(v)} stroke="#eef0f5" />
+            <text x={P.l - 6} y={y(v) + 3.5} fontSize="10" textAnchor="end" fill="#9aa2c0">{v}</text>
+          </g>
+        ))}
+        {vMin < 90 && <line x1={P.l} x2={W - P.r} y1={y(90)} y2={y(90)} stroke="#1a8a50" strokeDasharray="4 4" opacity=".5" />}
+        <text x={P.l} y={H - 8} fontSize="10" fill="#9aa2c0">{new Date(t0).toLocaleDateString('fi-FI')}</text>
+        <text x={W - P.r} y={H - 8} fontSize="10" fill="#9aa2c0" textAnchor="end">{new Date(t1).toLocaleDateString('fi-FI')}</text>
+        {series.map(s => (
+          <g key={s.key}>
+            <polyline fill="none" stroke={s.color} strokeWidth="2.5" points={s.pts.map(p => `${x(p.t)},${y(p.v)}`).join(' ')} />
+            {s.pts.map((p, i) => <circle key={i} cx={x(p.t)} cy={y(p.v)} r="3.5" fill="#fff" stroke={s.color} strokeWidth="2"><title>{`${s.key} ${new Date(p.t).toLocaleDateString('fi-FI')}: ${p.v}%`}</title></circle>)}
+          </g>
+        ))}
+      </svg>
+    )
+  }
+  return (
+    <div className="kx-card kx-trend">
+      <div className="kx-measure-summary-head">
+        <div className="kx-card-title" style={{ marginBottom: 0 }}>Turvallisuusindeksin kehitys</div>
+        <div className="kx-trend-legend">
+          {series.map(s => <span key={s.key}><i style={{ background: s.color }} />{s.key}</span>)}
+          <span><i style={{ background: '#1a8a50', opacity: .5 }} />tavoite 90 %</span>
+        </div>
+      </div>
+      {body}
+    </div>
+  )
+}
+
+// Asiakkaan TR-/MVR-historia luku-tilassa: jokainen mittaus omana korttinaan
+// luokittaisine tuloksineen ja kirjattuine puutteineen.
+function MeasurementHistory({ type, categories, legalNote, rows }) {
+  const [open, setOpen] = useState(rows[0]?.id ?? null)
+  return (
+    <div className="kx-measure-panel">
+      {rows.length === 0 && <div className="kx-empty-note">Ei vielä {type === 'tr' ? 'TR' : 'MVR'}-mittauksia tällä työmaalla.</div>}
+      <div className="kx-measure-list">
+        {rows.map(row => {
+          const { pct, total } = overallIndex(row.counts, categories)
+          const isOpen = open === row.id
+          const notes = categories.flatMap(c => (row.counts?.[c.key]?.notes || []).filter(n => (n.desc || '').trim()).map(n => ({ ...n, cat: c.label })))
+          return (
+            <div key={row.id} className="kx-card kx-measure-row">
+              <button className="kx-measure-row-head kx-plain-btn" onClick={() => setOpen(isOpen ? null : row.id)}>
+                <div style={{ textAlign: 'left' }}>
+                  <div className="kx-measure-row-date">{new Date(row.created_at).toLocaleDateString('fi-FI', { weekday: 'short', day: 'numeric', month: 'numeric', year: 'numeric' })}</div>
+                  <div className="kx-measure-row-sub">{total} havaintoa{row.inspector ? ` · ${row.inspector}` : ''}{notes.length ? ` · ${notes.filter(n => !n.korjattu).length} avointa puutetta` : ''}</div>
+                </div>
+                <span className="kx-measure-pct" style={{ color: indexColor(pct) }}>{pct == null ? '–' : `${pct}%`} {isOpen ? '▾' : '▸'}</span>
+              </button>
+              {isOpen && (
+                <div className="kx-measure-edit">
+                  {categories.map(c => {
+                    const cnt = row.counts?.[c.key] || { oikein: 0, vaarin: 0 }
+                    const cp = categoryPct(cnt)
+                    return (
+                      <div key={c.key} className="kx-measure-summary-cat-row">
+                        <span className="kx-measure-summary-cat-label">{c.label}</span>
+                        <span className="kx-measure-summary-cat-vals"><span className="ok">{cnt.oikein}</span> / <span className="no">{cnt.vaarin}</span>{'  '}<strong style={{ color: indexColor(cp) }}>{cp == null ? '–' : `${cp}%`}</strong></span>
+                      </div>
+                    )
+                  })}
+                  {notes.length > 0 && (
+                    <div className="kx-note-list">
+                      <div className="kx-label">Kirjatut puutteet</div>
+                      {notes.map(n => (
+                        <div key={n.id} className="kx-note-item">
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>{n.desc}</div>
+                          <div className="kx-hint">{n.cat}{n.vastuuhenkilo ? ` · vastuu: ${n.vastuuhenkilo}` : ''} · {n.korjattu ? <b style={{ color: '#1a8a50' }}>Korjattu {n.korjattuPvm ? new Date(n.korjattuPvm).toLocaleDateString('fi-FI') : ''}</b> : <b style={{ color: '#d63030' }}>Avoin</b>}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div className="kx-legal-note">{legalNote}</div>
     </div>
   )
 }
@@ -666,7 +970,7 @@ function WorksiteSummary({ obs }) {
 // Ei automaattitallennusta — muutokset kootaan korttiin ja tallennetaan
 // eksplisiittisesti "Tallenna muutokset" -napista, jotta hallintakäyttö
 // pysyy ennustettavana eikä lähetä kymmeniä pyyntöjä joka näppäimestä.
-function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSave, onToggleArchive, subcontractors }) {
+function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSave, onToggleArchive, subcontractors, urls = {}, onOpenPhoto }) {
   const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
   const sevBg = { Kriittinen: 'rgba(214,48,48,0.1)', Huomio: 'rgba(245,168,0,0.12)', Info: 'rgba(26,138,80,0.1)' }
   const list = obs.filter(o => showArchived ? o.archived : !o.archived)
@@ -688,9 +992,7 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
               <span className="kx-obs-index">Havainto</span>
               <div className="kx-obs-tags">
                 <span className="kx-tag" style={{ background: sevBg[o.sev], color: sevColor[o.sev] }}>{o.sev}</span>
-                <span className="kx-tag kx-status-tag" style={o.status === 'korjattu' ? { background: 'rgba(26,138,80,0.1)', color: '#1a8a50' } : { background: '#eef0f5', color: '#6a7086' }}>
-                  {o.status === 'korjattu' ? '✓ Korjattu' : 'Avoin'}
-                </span>
+                <StatusTag status={o.status} />
               </div>
             </div>
             <div className="kx-field">
@@ -740,19 +1042,41 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
             <div className="kx-field">
               <div className="kx-label">Tila</div>
               <div className="kx-btn-choice-row">
-                {['avoin', 'korjattu'].map(s => (
+                {['avoin', ...(o.status === 'kuitattu' ? ['kuitattu'] : []), 'korjattu'].map(s => (
                   <button key={s} className="kx-choice-btn" style={{
                     borderColor: o.status === s ? '#17275c' : '#d3d6e0',
                     background: o.status === s ? '#eef0f5' : '#f4f5f8',
                     color: o.status === s ? '#17275c' : '#6a7086',
-                  }} onClick={() => onChange(o.id, 'status', s)}>{s === 'korjattu' ? '✓ Korjattu' : 'Avoin'}</button>
+                  }} onClick={() => onChange(o.id, 'status', s)}>{s === 'korjattu' ? '✓ Korjattu' : s === 'kuitattu' ? 'Kuitattu (asiakas)' : 'Avoin'}</button>
                 ))}
               </div>
+            </div>
+            <div className="kx-field">
+              <div className="kx-label">Korjattava viimeistään</div>
+              <input type="date" className="kx-input" value={o.due_date || ''} onChange={e => onChange(o.id, 'due_date', e.target.value)} />
             </div>
             <div className="kx-field">
               <div className="kx-label">Lisätieto</div>
               <textarea className="kx-input kx-textarea" value={o.note || ''} onChange={e => onChange(o.id, 'note', e.target.value)} />
             </div>
+            {((o.photos || []).length > 0 || o.ack_photo || o.fix_photo) && (
+              <div className="kx-photo-row">
+                {(o.photos || []).map(p => (
+                  <button key={p.path} className="kx-photo" onClick={() => urls[p.path] && onOpenPhoto?.(urls[p.path])}>
+                    {urls[p.path] && <img src={urls[p.path]} alt="" />}<span className="kx-photo-label">Ennen</span>
+                  </button>
+                ))}
+                {o.ack_photo && <button className="kx-photo" onClick={() => urls[o.ack_photo] && onOpenPhoto?.(urls[o.ack_photo])}>{urls[o.ack_photo] && <img src={urls[o.ack_photo]} alt="" />}<span className="kx-photo-label">Asiakas</span></button>}
+                {o.fix_photo && <button className="kx-photo" onClick={() => urls[o.fix_photo] && onOpenPhoto?.(urls[o.fix_photo])}>{urls[o.fix_photo] && <img src={urls[o.fix_photo]} alt="" />}<span className="kx-photo-label">Jälkeen</span></button>}
+              </div>
+            )}
+            {(o.ack_at || o.status === 'korjattu' || o.reopen_comment) && (
+              <div className="kx-timeline">
+                {o.reopen_comment && o.status === 'avoin' && <div style={{ color: '#d63030' }}>↩ Palautettu: {o.reopen_comment}</div>}
+                {o.ack_at && <div>🟡 {o.ack_by_name} kuittasi {new Date(o.ack_at).toLocaleDateString('fi-FI')}{o.ack_comment ? ` — "${o.ack_comment}"` : ''}</div>}
+                {o.status === 'korjattu' && o.fixed_at && <div>🟢 Varmistettu {new Date(o.fixed_at).toLocaleDateString('fi-FI')}{o.fixed_by_name ? ` · ${o.fixed_by_name}` : ''}</div>}
+              </div>
+            )}
             {o.created_at && (
               <div className="kx-obs-meta">🕒 {new Date(o.created_at).toLocaleString('fi-FI', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
             )}
@@ -1109,6 +1433,41 @@ const DASHBOARD_CSS = `
 .kx-pdf-text.success { color: #1a8a50; font-weight: 600; }
 .kx-pdf-text.success span { color: #6a7086; font-weight: 400; }
 
+
+.kx-viewswitch { display: flex; background: rgba(255,255,255,0.1); border-radius: 9px; padding: 3px; gap: 2px; }
+.kx-viewswitch button { background: none; border: none; color: rgba(255,255,255,0.75); font-size: 13px; font-weight: 700; padding: 7px 12px; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.kx-viewswitch button.active { background: #fff; color: #17275c; }
+.kx-count-pill { background: #f5a800; color: #14183a; border-radius: 10px; font-size: 11px; padding: 1px 7px; }
+.kx-shell-single { display: block; }
+.kx-site-name { display: flex; flex-direction: column; gap: 1px; }
+.kx-site-client { font-size: 11px; font-weight: 500; color: #9aa2c0; }
+.kx-client-select { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: #6a7086; flex-wrap: wrap; }
+.kx-client-select select { width: auto; max-width: 280px; }
+.kx-kpis { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.kx-kpi { background: #f9fafc; border: 1px solid #eef0f5; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 2px; text-align: left; font-family: inherit; }
+button.kx-kpi { cursor: pointer; } button.kx-kpi:hover { border-color: #b3b8c8; }
+.kx-kpi-num { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.kx-kpi-label { font-size: 11.5px; color: #6a7086; font-weight: 600; }
+.kx-trend { grid-column: 1 / -1; }
+.kx-trend-svg { width: 100%; height: auto; max-height: 260px; display: block; margin-top: 8px; }
+.kx-tag { white-space: nowrap; }
+.kx-obs-card-head { gap: 8px; align-items: flex-start; }
+.kx-trend-legend { display: flex; gap: 12px; font-size: 11.5px; color: #6a7086; flex-wrap: wrap; }
+.kx-trend-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.kx-plain-btn { width: 100%; background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; }
+.kx-recent-obs-row .kx-tag { flex-shrink: 0; }
+@media (max-width: 820px) {
+  .kx-topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .kx-topbar-actions { flex-wrap: wrap; width: 100%; justify-content: space-between; }
+  .kx-viewswitch { flex: 1; overflow-x: auto; }
+  .kx-viewswitch button { padding: 7px 9px; font-size: 12px; }
+  .kx-hide-mobile { display: none; }
+  .kx-main-head-actions { width: 100%; }
+  .kx-main-head-actions > * { flex: 1; justify-content: center; }
+}
+@media (max-width: 820px) {
+  .kx-topbar { position: static; }
+}
 @media (max-width: 820px) {
   .kx-shell { flex-direction: column; padding: 14px; gap: 14px; }
   .kx-sidebar { flex: none; width: 100%; position: static; }

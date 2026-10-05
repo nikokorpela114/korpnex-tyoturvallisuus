@@ -5,7 +5,8 @@ import {
   emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, compressImage, buildReportPDF,
   addNote, updateNote, removeNote,
 } from './shared.js'
-import Dashboard from './Dashboard.jsx'
+import FollowUp, { useFollowUp } from './FollowUp.jsx'
+import { uploadPhoto } from './photos.js'
 
 let idCounter = 0
 // Jokaisella työmaalla on oma keskeneräinen luonnoksensa tässä kartassa,
@@ -28,13 +29,11 @@ function loadDraftsMap() {
   } catch { return {} }
 }
 
-export default function App() {
-  // ?valvomo avaa erillisen kooste-/raportointinäkymän kaikista työmaista.
-  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('valvomo')) {
-    return <Dashboard />
-  }
-
-  const [tab, setTab] = useState('havainnot') // 'havainnot' | 'tr' | 'mvr'
+// Kenttäsovellus — vain konsultille (ks. main.jsx). Asiakkaat ohjataan
+// aina Valvomoon/asiakasportaaliin.
+export default function App({ profile, logout }) {
+  const [tab, setTab] = useState('havainnot') // 'havainnot' | 'seuranta' | 'tr' | 'mvr'
+  const [menuOpen, setMenuOpen] = useState(false)
   const [site, setSite] = useState('')
   const [inspector, setInspector] = useState('')
   const [worksites, setWorksites] = useState([])
@@ -67,11 +66,15 @@ export default function App() {
   // (setTimeout-kutsut) ja online/interval-kuuntelijat lukevat AINA tuoreimman
   // arvon eivätkä jää kiinni siihen state-arvoon joka oli voimassa silloin kun
   // closure luotiin (React-classic "stale closure" -ongelma).
+  const worksitesRef = useRef([])
+  const savingRef = useRef(new Set())   // havainnot joiden tallennus on kesken
+  const resaveRef = useRef(new Set())   // ja jotka pitää tallentaa uudelleen sen jälkeen
   const trCountsRef = useRef(trCounts)
   const mvrCountsRef = useRef(mvrCounts)
   const trDbIdRef = useRef(trDbId)
   const mvrDbIdRef = useRef(mvrDbId)
   useEffect(() => { obsRef.current = obs }, [obs])
+  useEffect(() => { worksitesRef.current = worksites }, [worksites])
   useEffect(() => { metaRef.current = { site, inspector } }, [site, inspector])
   useEffect(() => { trCountsRef.current = trCounts }, [trCounts])
   useEffect(() => { mvrCountsRef.current = mvrCounts }, [mvrCounts])
@@ -91,6 +94,9 @@ export default function App() {
       if (!error && data) setWorksites(data)
     })
   }, [])
+
+  // Aiempien kierrosten avoimet/kuitatut havainnot (Seuranta-välilehti)
+  const followUp = useFollowUp(site, reportIdRef.current)
 
   // Työmaan aliurakoitsijat (hallitaan Valvomosta) — käytetään Yritys- ja
   // Vastuuhenkilö-kenttien valintalistana, ettei niitä tarvitse kirjoittaa
@@ -127,6 +133,7 @@ export default function App() {
       const lastSite = localStorage.getItem(LAST_SITE_KEY) || ''
       const savedInspector = localStorage.getItem(INSPECTOR_KEY) || ''
       if (savedInspector) setInspector(savedInspector)
+      else if (profile?.name) setInspector(profile.name)
       if (lastSite) applyDraft(lastSite, loadDraftsMap()[lastSite])
     } catch {}
     restoredRef.current = true
@@ -184,47 +191,90 @@ export default function App() {
   }, [])
 
   function retrySync() {
-    obsRef.current.forEach(o => { if (!o.db_id) saveObs(o, metaRef.current.site, metaRef.current.inspector) })
+    obsRef.current.forEach(o => {
+      if (!o.db_id || (o.photos || []).some(p => !p.path)) saveObs(o, metaRef.current.site, metaRef.current.inspector)
+    })
     saveMeasurement('tr')
     saveMeasurement('mvr')
   }
 
-  // --- Havainnot: Supabase-synkronointi (kuvat pysyvät vain paikallisesti / PDF:ssä) ---
+  // --- Havainnot: Supabase-synkronointi ---
+  // Kuvat ladataan Storageen (tt-photos/<työmaa-id>/...) ennen rivin
+  // tallennusta, jotta asiakas näkee ne portaalissa. Offline-tilassa kuvat
+  // odottavat laitteella ja ladataan seuraavalla synkronointikerralla.
   async function saveObs(o, currentSite, currentInspector) {
-    const data = {
-      havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note,
-      site: currentSite, inspector: currentInspector,
-      local_id: o.id, report_id: reportIdRef.current,
-    }
+    if (savingRef.current.has(o.id)) { resaveRef.current.add(o.id); return null }
+    savingRef.current.add(o.id)
     try {
+      const ws = worksitesRef.current.find(w => w.name === currentSite)
+      let photos = o.photos || []
+      if (ws && photos.some(p => !p.path && p.src)) {
+        const uploaded = []
+        for (const p of photos) {
+          if (p.path || !p.src) { uploaded.push(p); continue }
+          const path = await uploadPhoto(ws.id, p.src)
+          uploaded.push({ ...p, path })
+        }
+        photos = uploaded
+        const bySrc = new Map(photos.map(p => [p.src, p.path]))
+        setObs(prev => prev.map(x => x.id === o.id
+          ? { ...x, photos: x.photos.map(p => p.path ? p : { ...p, path: bySrc.get(p.src) || undefined }) } : x))
+      }
+      const data = {
+        havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note,
+        due_date: o.due_date || null,
+        photos: photos.filter(p => p.path).map(p => ({ path: p.path })),
+        site: currentSite, inspector: currentInspector,
+        local_id: o.id, report_id: reportIdRef.current,
+      }
       if (o.db_id) {
         const { error } = await sb.from('safety_observations').update(data).eq('id', o.db_id)
         if (error) throw error
         showSync('✓ Tallennettu')
         return o.db_id
-      } else {
-        const { data: res, error } = await sb.from('safety_observations')
-          .insert([{ ...data, created_at: o.createdAt || new Date().toISOString() }]).select()
-        if (error) throw error
-        if (res?.[0]) {
-          setObs(prev => prev.map(x => x.id === o.id ? { ...x, db_id: res[0].id } : x))
-          showSync('✓ Tallennettu')
-          return res[0].id
-        }
+      }
+      const { data: res, error } = await sb.from('safety_observations')
+        .insert([{ ...data, created_at: o.createdAt || new Date().toISOString() }]).select()
+      if (error) throw error
+      if (res?.[0]) {
+        setObs(prev => prev.map(x => x.id === o.id ? { ...x, db_id: res[0].id } : x))
+        obsRef.current = obsRef.current.map(x => x.id === o.id ? { ...x, db_id: res[0].id } : x)
+        showSync('✓ Tallennettu')
+        return res[0].id
       }
     } catch (e) {
       console.error('saveObs failed:', e)
       const looksLikeNetwork = !navigator.onLine || e?.message?.toLowerCase().includes('fetch')
       showSync(looksLikeNetwork ? '⚠ Ei yhteyttä — tallessa vain paikallisesti' : '⚠ Tallennusvirhe (katso konsoli)')
       return null
+    } finally {
+      savingRef.current.delete(o.id)
+      if (resaveRef.current.has(o.id)) {
+        resaveRef.current.delete(o.id)
+        setTimeout(() => {
+          const latest = obsRef.current.find(x => x.id === o.id)
+          if (latest) saveObs(latest, metaRef.current.site, metaRef.current.inspector)
+        }, 50)
+      }
     }
     return null
+  }
+
+  function scheduleSave(id) {
+    setObs(prev => prev.map(o => {
+      if (o.id !== id) return o
+      clearTimeout(o._timer)
+      return { ...o, _timer: setTimeout(() => {
+        const latest = obsRef.current.find(x => x.id === id)
+        if (latest) saveObs(latest, metaRef.current.site, metaRef.current.inspector)
+      }, 800) }
+    }))
   }
 
   function addObs() {
     const id = ++idCounter
     setObs(prev => [...prev, {
-      id, havainto: '', yritys: '', sev: 'Huomio', note: '', photos: [],
+      id, havainto: '', yritys: '', sev: 'Huomio', note: '', due_date: '', photos: [],
       db_id: null, createdAt: new Date().toISOString(),
     }])
   }
@@ -257,10 +307,11 @@ export default function App() {
 
   async function addPhotos(id, files) {
     for (const file of Array.from(files)) {
-      const src = await compressImage(file)
+      const src = await compressImage(file, 1280, 0.72)
       if (!src) continue
       setObs(prev => prev.map(o => o.id !== id ? o : { ...o, photos: [...o.photos, { src }] }))
     }
+    scheduleSave(id)
   }
   function removePhoto(id, pi) {
     setObs(prev => prev.map(o => {
@@ -268,6 +319,7 @@ export default function App() {
       const photos = [...o.photos]; photos.splice(pi, 1)
       return { ...o, photos }
     }))
+    scheduleSave(id)
   }
 
   // --- TR/MVR-mittaus: laskurit + Supabase-synkronointi ---
@@ -382,6 +434,7 @@ export default function App() {
     ])
     setTrCounts(trBase)
     setMvrCounts(mvrBase)
+    followUp.reload()
     // Tallennus-effect kirjoittaa uuden tilan tämän työmaan kohtaan
     // kartassa automaattisesti heti kun obs/trCounts/mvrCounts päivittyvät.
   }
@@ -419,6 +472,7 @@ export default function App() {
 
   const trResult = overallIndex(trCounts, TR_CATEGORIES)
   const mvrResult = overallIndex(mvrCounts, MVR_CATEGORIES)
+  const currentWs = worksites.find(w => w.name === site)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: 480, margin: '0 auto' }}>
@@ -434,7 +488,15 @@ export default function App() {
             <span style={{ fontSize: 11, color: '#17275c', fontWeight: 700, background: '#c7cbd6', padding: '3px 8px', borderRadius: 20 }}>⚠ Offline</span>
           )}
           {syncMsg && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>{syncMsg}</span>}
+          <button onClick={() => setMenuOpen(m => !m)} aria-label="Valikko" style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 34, height: 34, borderRadius: 8, fontSize: 17 }}>☰</button>
         </div>
+        {menuOpen && (
+          <div style={{ position: 'absolute', right: 12, top: '100%', marginTop: 4, background: '#fff', border: '1px solid #d3d6e0', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.15)', minWidth: 200, overflow: 'hidden' }}>
+            <div style={{ padding: '10px 14px', fontSize: 12, color: '#6a7086', borderBottom: '1px solid #eef0f5' }}>{profile?.email}</div>
+            <a href="/?valvomo" style={menuItem}>🖥 Valvomo & asiakkaat</a>
+            <button onClick={logout} style={{ ...menuItem, width: '100%', textAlign: 'left', background: 'none', border: 'none' }}>⎋ Kirjaudu ulos</button>
+          </div>
+        )}
       </div>
 
       {/* Meta */}
@@ -481,11 +543,13 @@ export default function App() {
       <div style={{ display: 'flex', gap: 6, padding: '10px 16px 0', background: '#fff' }}>
         {[
           ['havainnot', `Havainnot${obs.length ? ` (${obs.length})` : ''}`],
-          ['tr', `TR-mittaus${trResult.total ? ` (${trResult.pct}%)` : ''}`],
-          ['mvr', `MVR-mittaus${mvrResult.total ? ` (${mvrResult.pct}%)` : ''}`],
+          ['seuranta', `Seuranta${followUp.list.length ? ` (${followUp.list.length})` : ''}`],
+          ['tr', `TR${trResult.total ? ` ${trResult.pct}%` : ''}`],
+          ['mvr', `MVR${mvrResult.total ? ` ${mvrResult.pct}%` : ''}`],
         ].map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)} style={{
-            flex: 1, padding: '10px 4px', borderRadius: '10px 10px 0 0', fontSize: 12, fontWeight: 700,
+          <button key={key} onClick={() => { setTab(key); if (key === 'seuranta') followUp.reload() }} style={{
+            flex: 1, padding: '10px 2px', borderRadius: '10px 10px 0 0', fontSize: 11.5, fontWeight: 700, position: 'relative',
+            ...(key === 'seuranta' && followUp.list.some(o => o.status === 'kuitattu') ? { boxShadow: 'inset 0 3px 0 #f5a800' } : {}),
             border: 'none', borderBottom: tab === key ? '3px solid #223a8c' : '3px solid transparent',
             background: tab === key ? '#eef0f5' : '#fff', color: tab === key ? '#17275c' : '#6a7086',
           }}>{label}</button>
@@ -557,6 +621,10 @@ export default function App() {
                     </div>
                   </div>
                   <div>
+                    <div style={labelStyle}>Korjattava viimeistään <span style={{ textTransform: 'none', fontWeight: 500 }}>(valinnainen)</span></div>
+                    <input type="date" style={inputStyle} value={o.due_date || ''} onChange={e => updateObs(o.id, 'due_date', e.target.value)} />
+                  </div>
+                  <div>
                     <div style={labelStyle}>Lisätieto</div>
                     <textarea style={{ ...selectStyle, resize: 'none', minHeight: 56, lineHeight: 1.5 }}
                       placeholder="Tarkempi kuvaus / lisätieto..." value={o.note} onChange={e => updateObs(o.id, 'note', e.target.value)} />
@@ -569,6 +637,7 @@ export default function App() {
                           {o.photos.map((p, pi) => (
                             <div key={pi} style={{ position: 'relative', width: 76, height: 76, borderRadius: 8, overflow: 'hidden' }}>
                               <img src={p.src} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
+                              {!p.path && <span title="Kuva odottaa lähetystä pilveen" style={{ position: 'absolute', left: 3, bottom: 3, width: 9, height: 9, borderRadius: '50%', background: '#d07800', border: '1.5px solid #fff' }} />}
                               <button onClick={() => removePhoto(o.id, pi)} style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 13 }}>×</button>
                             </div>
                           ))}
@@ -589,6 +658,10 @@ export default function App() {
               ＋ Lisää havainto
             </button>
           </div>
+        )}
+
+        {tab === 'seuranta' && (
+          <FollowUp {...followUp} worksiteId={currentWs?.id} inspectorName={inspector || profile?.name} isOnline={isOnline} />
         )}
 
         {(tab === 'tr' || tab === 'mvr') && (
@@ -798,6 +871,7 @@ const selectStyle = {
   color: '#14183a', fontSize: 14, padding: '9px 12px', width: '100%', outline: 'none',
   WebkitAppearance: 'none', appearance: 'none',
 }
+const menuItem = { display: 'block', padding: '11px 14px', fontSize: 14, color: '#14183a', textDecoration: 'none', cursor: 'pointer' }
 const labelStyle = {
   fontSize: 11, fontWeight: 700, color: '#6a7086',
   letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 5,

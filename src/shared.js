@@ -109,16 +109,16 @@ export const SEV_LABELS = ['Kriittinen', 'Huomio', 'Info']
 // niitä on, ja kuinka moni on vielä korjaamatta.
 export function summarizeObservations(obs) {
   const bySev = { Kriittinen: 0, Huomio: 0, Info: 0 }
-  const byStatus = { avoin: 0, korjattu: 0 }
+  const byStatus = { avoin: 0, kuitattu: 0, korjattu: 0 }
   const yritysMap = new Map()
   for (const o of obs) {
     const sev = bySev[o.sev] != null ? o.sev : null
     if (sev) bySev[sev]++
-    const status = o.status === 'korjattu' ? 'korjattu' : 'avoin'
+    const status = o.status === 'korjattu' || o.status === 'kuitattu' ? o.status : 'avoin'
     byStatus[status]++
     const yritys = (o.yritys || '').trim() || 'Ei merkitty'
     if (!yritysMap.has(yritys)) {
-      yritysMap.set(yritys, { yritys, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, korjattu: 0 })
+      yritysMap.set(yritys, { yritys, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, kuitattu: 0, korjattu: 0 })
     }
     const row = yritysMap.get(yritys)
     row.total++
@@ -244,7 +244,8 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
     y += 6
     doc.setTextColor(40, 40, 40)
     doc.text(`Avoinna: ${summary.byStatus.avoin}`, M, y)
-    doc.setTextColor(26, 138, 80); doc.text(`Korjattu: ${summary.byStatus.korjattu}`, M + 62, y)
+    doc.setTextColor(208, 120, 0); doc.text(`Kuitattu, odottaa tarkastusta: ${summary.byStatus.kuitattu}`, M + 62, y)
+    doc.setTextColor(26, 138, 80); doc.text(`Korjattu: ${summary.byStatus.korjattu}`, M + 148, y)
     y += 9
 
     if (summary.byYritys.length > 0) {
@@ -275,14 +276,15 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
   }
 
   if (obs.length > 0) {
-    ensureSpace(14)
+    ensureSpace(14 + 16 + (obs[0]?.photos?.length ? 72 : 0))
     doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
     doc.text('Havainnot', M, y); y += 9
 
     const sevCol = { Kriittinen: [214, 48, 48], Huomio: [208, 120, 0], Info: [26, 138, 80] }
     for (let i = 0; i < obs.length; i++) {
       const o = obs[i]
-      ensureSpace(16)
+      // Otsikko, tekstit ja ensimmäinen kuvarivi samalle sivulle
+      ensureSpace(16 + (o.photos?.length ? 72 : 0) + (o.note ? 10 : 0))
       const col = sevCol[o.sev] || [80, 80, 80]
       doc.setFillColor(...col)
       doc.roundedRect(M, y, CW, 8, 1.5, 1.5, 'F')
@@ -305,25 +307,60 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
         doc.text(new Date(o.createdAt).toLocaleString('fi-FI', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), M + 2, y)
         y += 5
       }
+      if (o.status) {
+        ensureSpace(6)
+        const fmt = d => d ? new Date(d).toLocaleDateString('fi-FI') : ''
+        const st = o.status === 'korjattu'
+          ? `Korjattu ${fmt(o.fixed_at)}${o.fixed_by_name ? ' (' + o.fixed_by_name + ')' : ''}`
+          : o.status === 'kuitattu'
+            ? `Kuitattu korjatuksi ${fmt(o.ack_at)}${o.ack_by_name ? ' (' + o.ack_by_name + ')' : ''}, odottaa tarkastusta`
+            : `Avoin${o.due_date ? ' · korjattava ' + fmt(o.due_date) + ' mennessä' : ''}`
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9)
+        doc.setTextColor(...(o.status === 'korjattu' ? [26, 138, 80] : o.status === 'kuitattu' ? [208, 120, 0] : [100, 105, 125]))
+        doc.text('Tila: ' + st, M + 2, y)
+        y += 5.5
+        if (o.ack_comment) {
+          doc.setFont('helvetica', 'italic'); doc.setTextColor(60, 64, 90)
+          const l = doc.splitTextToSize('Kuittaus: ' + o.ack_comment, CW - 4)
+          ensureSpace(l.length * 4.5 + 1)
+          doc.text(l, M + 2, y); y += l.length * 4.5 + 1
+        }
+      }
       if (o.note) {
         ensureSpace(8)
         doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(40, 40, 40)
         const lines = doc.splitTextToSize(o.note, CW - 4)
         doc.text(lines, M + 2, y); y += lines.length * 5 + 2
       }
+      // Kuvat rinnakkain, enintään 3 per rivi (Ennen / Asiakkaan kuva / Jälkeen).
+      const loaded = []
       for (const photo of (o.photos || [])) {
         const img = new Image(); img.src = photo.src
         await new Promise(r => { img.onload = r; img.onerror = r })
+        if (!img.naturalWidth) continue
         const c = document.createElement('canvas')
         c.width = img.naturalWidth; c.height = img.naturalHeight
         c.getContext('2d').drawImage(img, 0, 0)
-        const corrected = c.toDataURL('image/jpeg', 0.85)
-        const nw = img.naturalWidth || 800, nh = img.naturalHeight || 600
-        const sc = Math.min((CW - 4) / nw, 220 / nh)
-        const dw = nw * sc, dh = nh * sc
-        ensureSpace(dh + 4)
-        try { doc.addImage(corrected, 'JPEG', M + 2, y, dw, dh) } catch {}
-        y += dh + 4
+        loaded.push({ data: c.toDataURL('image/jpeg', 0.85), nw: img.naturalWidth, nh: img.naturalHeight, label: photo.label })
+      }
+      const perRow = 3
+      const gap = 3, cellW = (CW - 4 - gap * 2) / 3, cellH = 52
+      for (let k = 0; k < loaded.length; k += perRow) {
+        const row = loaded.slice(k, k + perRow)
+        const sizes = row.map(ph => { const sc = Math.min(cellW / ph.nw, cellH / ph.nh); return [ph.nw * sc, ph.nh * sc] })
+        const rowH = Math.max(...sizes.map(z => z[1]))
+        ensureSpace(rowH + 4)
+        row.forEach((ph, j) => {
+          const x = M + 2 + j * (cellW + gap)
+          const [dw, dh] = sizes[j]
+          try { doc.addImage(ph.data, 'JPEG', x, y, dw, dh) } catch {}
+          if (ph.label) {
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(255, 255, 255)
+            doc.setFillColor(23, 39, 92); doc.rect(x, y, doc.getTextWidth(ph.label) + 4, 5.5, 'F')
+            doc.text(ph.label, x + 2, y + 3.9)
+          }
+        })
+        y += rowH + 4
       }
       y += 3
     }
