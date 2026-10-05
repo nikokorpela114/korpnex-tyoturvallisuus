@@ -144,7 +144,10 @@ export default function AuthGate({ children }) {
       )}
       <p style={{ ...pStyle, fontSize: 12, marginTop: 22, textAlign: 'center', color: 'rgba(255,255,255,.55)' }}>
         Portaali on Korpnexin työturvallisuuspalveluiden asiakkaille.<br />
-        Tunnukset saat Korpnexilta · <a href="https://korpnex.fi" style={{ color: '#7cc8ff' }}>korpnex.fi</a>
+        Tunnukset saat Korpnexilta · <a href="https://korpnex.fi" style={{ color: '#7cc8ff' }}>korpnex.fi</a><br />
+        <a href="https://korpnex.fi/korpnex-tyoturvallisuus-kayttoehdot.html" target="_blank" rel="noreferrer" style={{ color: 'rgba(255,255,255,.55)' }}>Käyttöehdot</a>
+        {' · '}
+        <a href="https://korpnex.fi/korpnex-tyoturvallisuus-tietosuoja.html" target="_blank" rel="noreferrer" style={{ color: 'rgba(255,255,255,.55)' }}>Tietosuoja</a>
       </p>
     </Shell>
   )
