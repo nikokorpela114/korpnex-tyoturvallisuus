@@ -467,8 +467,8 @@ export default function App({ profile, logout }) {
     }
   }
 
-  const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
-  const sevBg = { Kriittinen: 'rgba(214,48,48,0.1)', Huomio: 'rgba(245,168,0,0.12)', Info: 'rgba(26,138,80,0.1)' }
+  const sevColor = { Kriittinen: '#dc2626', Huomio: '#d97706', Info: '#059669' }
+  const sevBg = { Kriittinen: 'rgba(220,38,38,0.1)', Huomio: 'rgba(245,168,0,0.12)', Info: 'rgba(5,150,105,0.1)' }
 
   const trResult = overallIndex(trCounts, TR_CATEGORIES)
   const mvrResult = overallIndex(mvrCounts, MVR_CATEGORIES)
@@ -477,22 +477,22 @@ export default function App({ profile, logout }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: 480, margin: '0 auto' }}>
       {/* Topbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 10px', background: '#17275c', position: 'sticky', top: 0, zIndex: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 10px', background: '#0a1428', position: 'sticky', top: 0, zIndex: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img src="/korpnex-icon.png" alt="Korpnex" style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'cover', display: 'block' }} />
-          <span style={{ fontSize: 17, fontWeight: 800, color: 'white', letterSpacing: 0.5 }}>KORPNEX</span>
+          <img src="/korpnex-icon.png" alt="Korpnex" style={{ width: 32, height: 32, borderRadius: 10, objectFit: 'cover', display: 'block' }} />
+          <span style={{ fontFamily: 'Jakarta, Inter, sans-serif', fontSize: 16, fontWeight: 800, color: 'white', letterSpacing: 3 }}>KORPNEX</span>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', fontWeight: 500, marginLeft: 2 }}>· Työturvallisuus</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {!isOnline && (
-            <span style={{ fontSize: 11, color: '#17275c', fontWeight: 700, background: '#c7cbd6', padding: '3px 8px', borderRadius: 20 }}>⚠ Offline</span>
+            <span style={{ fontSize: 11, color: '#0a1428', fontWeight: 700, background: '#c7cbd6', padding: '3px 8px', borderRadius: 20 }}>⚠ Offline</span>
           )}
           {syncMsg && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>{syncMsg}</span>}
-          <button onClick={() => setMenuOpen(m => !m)} aria-label="Valikko" style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 34, height: 34, borderRadius: 8, fontSize: 17 }}>☰</button>
+          <button onClick={() => setMenuOpen(m => !m)} aria-label="Valikko" style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 34, height: 34, borderRadius: 10, fontSize: 17 }}>☰</button>
         </div>
         {menuOpen && (
-          <div style={{ position: 'absolute', right: 12, top: '100%', marginTop: 4, background: '#fff', border: '1px solid #d3d6e0', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.15)', minWidth: 200, overflow: 'hidden' }}>
-            <div style={{ padding: '10px 14px', fontSize: 12, color: '#6a7086', borderBottom: '1px solid #eef0f5' }}>{profile?.email}</div>
+          <div style={{ position: 'absolute', right: 12, top: '100%', marginTop: 4, background: '#fff', border: '1px solid #e3e8ef', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.15)', minWidth: 200, overflow: 'hidden' }}>
+            <div style={{ padding: '10px 14px', fontSize: 12, color: '#64748b', borderBottom: '1px solid #f1f4f9' }}>{profile?.email}</div>
             <a href="/?valvomo" style={menuItem}>🖥 Valvomo & asiakkaat</a>
             <button onClick={logout} style={{ ...menuItem, width: '100%', textAlign: 'left', background: 'none', border: 'none' }}>⎋ Kirjaudu ulos</button>
           </div>
@@ -500,7 +500,7 @@ export default function App({ profile, logout }) {
       </div>
 
       {/* Meta */}
-      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', borderBottom: '1px solid #d3d6e0' }}>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', borderBottom: '1px solid #e3e8ef' }}>
         <div>
           <div style={labelStyle}>Työmaa</div>
           {!addingSite ? (
@@ -518,22 +518,22 @@ export default function App({ profile, logout }) {
               <input autoFocus style={{ ...inputStyle, flex: 1 }} placeholder="Uuden työmaan nimi"
                 value={newSiteName} onChange={e => setNewSiteName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addWorksite()} />
-              <button onClick={addWorksite} style={{ padding: '0 14px', background: '#17275c', border: 'none', borderRadius: 8, color: '#fff', fontWeight: 700, fontSize: 13 }}>Lisää</button>
-              <button onClick={() => setAddingSite(false)} style={{ padding: '0 12px', background: '#eef0f5', border: '1px solid #d3d6e0', borderRadius: 8, color: '#6a7086', fontSize: 15 }}>✕</button>
+              <button onClick={addWorksite} style={{ padding: '0 14px', background: '#0a1428', border: 'none', borderRadius: 10, color: '#fff', fontWeight: 700, fontSize: 13 }}>Lisää</button>
+              <button onClick={() => setAddingSite(false)} style={{ padding: '0 12px', background: '#f1f4f9', border: '1px solid #e3e8ef', borderRadius: 10, color: '#64748b', fontSize: 15 }}>✕</button>
             </div>
           )}
         </div>
         <input style={inputStyle} placeholder="Tarkastaja" value={inspector} onChange={e => setInspector(e.target.value)} />
         {site && (
-          <button onClick={newReport} style={{ alignSelf: 'flex-end', background: 'none', border: 'none', fontSize: 11, color: '#6a7086', padding: '2px 0' }}>
+          <button onClick={newReport} style={{ alignSelf: 'flex-end', background: 'none', border: 'none', fontSize: 11, color: '#64748b', padding: '2px 0' }}>
             🔄 Uusi raportti tälle työmaalle
           </button>
         )}
       </div>
 
       {!site ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32, background: '#eef0f5' }}>
-          <p style={{ fontSize: 14, color: '#6a7086', textAlign: 'center', lineHeight: 1.6 }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32, background: '#f1f4f9' }}>
+          <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', lineHeight: 1.6 }}>
             📍 Valitse tai lisää työmaa yläreunasta<br />aloittaaksesi tarkastuksen.
           </p>
         </div>
@@ -550,33 +550,33 @@ export default function App({ profile, logout }) {
           <button key={key} onClick={() => { setTab(key); if (key === 'seuranta') followUp.reload() }} style={{
             flex: 1, padding: '10px 2px', borderRadius: '10px 10px 0 0', fontSize: 11.5, fontWeight: 700, position: 'relative',
             ...(key === 'seuranta' && followUp.list.some(o => o.status === 'kuitattu') ? { boxShadow: 'inset 0 3px 0 #f5a800' } : {}),
-            border: 'none', borderBottom: tab === key ? '3px solid #223a8c' : '3px solid transparent',
-            background: tab === key ? '#eef0f5' : '#fff', color: tab === key ? '#17275c' : '#6a7086',
+            border: 'none', borderBottom: tab === key ? '3px solid #0878E8' : '3px solid transparent',
+            background: tab === key ? '#f1f4f9' : '#fff', color: tab === key ? '#0a1428' : '#64748b',
           }}>{label}</button>
         ))}
       </div>
 
       {/* Scroll area */}
-      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 90, background: '#eef0f5' }}>
+      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 90, background: '#f1f4f9' }}>
 
         {tab === 'havainnot' && (
           <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             {obs.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '48px 24px', color: '#6a7086' }}>
+              <div style={{ textAlign: 'center', padding: '48px 24px', color: '#64748b' }}>
                 <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.3 }}>📋</div>
                 <p style={{ fontSize: 14, lineHeight: 1.6 }}>Ei havaintoja.<br />Paina + lisätäksesi ensimmäisen.</p>
               </div>
             )}
             {obs.map((o, idx) => (
-              <div key={o.id} style={{ background: '#fff', border: '1px solid #d3d6e0', borderRadius: 12, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', background: '#eef0f5', borderBottom: '1px solid #d3d6e0' }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#6a7086', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              <div key={o.id} style={{ background: '#fff', border: '1px solid #e3e8ef', borderRadius: 14, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', background: '#f1f4f9', borderBottom: '1px solid #e3e8ef' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: 0.5, textTransform: 'uppercase' }}>
                     Havainto {idx + 1}
-                    {!o.db_id && <span title="Ei vielä synkronoitu pilveen — tallessa paikallisesti" style={{ marginLeft: 6, color: '#d07800' }}>●</span>}
+                    {!o.db_id && <span title="Ei vielä synkronoitu pilveen — tallessa paikallisesti" style={{ marginLeft: 6, color: '#d97706' }}>●</span>}
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: sevBg[o.sev], color: sevColor[o.sev] }}>{o.sev}</span>
-                    <button onClick={() => removeObs(o.id)} style={{ background: 'none', border: 'none', color: '#6a7086', fontSize: 18 }}>🗑</button>
+                    <button onClick={() => removeObs(o.id)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 18 }}>🗑</button>
                   </div>
                 </div>
                 <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -591,7 +591,7 @@ export default function App({ profile, logout }) {
                         <input style={{ ...inputStyle, flex: 1 }} placeholder="Mikä yritys / aliurakoitsija" value={o.yritys} onChange={e => updateObs(o.id, 'yritys', e.target.value)} />
                         {subcontractors.length > 0 && (
                           <button onClick={() => { setObsYritysCustom(p => ({ ...p, [o.id]: false })); updateObs(o.id, 'yritys', '') }}
-                            title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 8, border: '1px solid #d3d6e0', background: '#eef0f5', color: '#6a7086', fontSize: 12 }}>↩</button>
+                            title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 10, border: '1px solid #e3e8ef', background: '#f1f4f9', color: '#64748b', fontSize: 12 }}>↩</button>
                         )}
                       </div>
                     ) : (
@@ -612,10 +612,10 @@ export default function App({ profile, logout }) {
                     <div style={{ display: 'flex', gap: 8 }}>
                       {SEV_LABELS.map(s => (
                         <button key={s} onClick={() => updateObs(o.id, 'sev', s)} style={{
-                          flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 12, fontWeight: 700,
-                          border: `1px solid ${o.sev === s ? sevColor[s] : '#d3d6e0'}`,
-                          background: o.sev === s ? sevBg[s] : '#eef0f5',
-                          color: o.sev === s ? sevColor[s] : '#6a7086',
+                          flex: 1, padding: '8px 4px', borderRadius: 10, fontSize: 12, fontWeight: 700,
+                          border: `1px solid ${o.sev === s ? sevColor[s] : '#e3e8ef'}`,
+                          background: o.sev === s ? sevBg[s] : '#f1f4f9',
+                          color: o.sev === s ? sevColor[s] : '#64748b',
                         }}>{s}</button>
                       ))}
                     </div>
@@ -631,20 +631,20 @@ export default function App({ profile, logout }) {
                   </div>
                   <div>
                     <div style={labelStyle}>Kuvat</div>
-                    <div style={{ border: '1px dashed #b3b8c8', borderRadius: 8, overflow: 'hidden' }}>
+                    <div style={{ border: '1px dashed #cbd3df', borderRadius: 10, overflow: 'hidden' }}>
                       {o.photos.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 8 }}>
                           {o.photos.map((p, pi) => (
-                            <div key={pi} style={{ position: 'relative', width: 76, height: 76, borderRadius: 8, overflow: 'hidden' }}>
+                            <div key={pi} style={{ position: 'relative', width: 76, height: 76, borderRadius: 10, overflow: 'hidden' }}>
                               <img src={p.src} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
-                              {!p.path && <span title="Kuva odottaa lähetystä pilveen" style={{ position: 'absolute', left: 3, bottom: 3, width: 9, height: 9, borderRadius: '50%', background: '#d07800', border: '1.5px solid #fff' }} />}
+                              {!p.path && <span title="Kuva odottaa lähetystä pilveen" style={{ position: 'absolute', left: 3, bottom: 3, width: 9, height: 9, borderRadius: '50%', background: '#d97706', border: '1.5px solid #fff' }} />}
                               <button onClick={() => removePhoto(o.id, pi)} style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 13 }}>×</button>
                             </div>
                           ))}
                         </div>
                       )}
                       <label>
-                        <button onClick={e => e.currentTarget.parentElement.querySelector('input').click()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 11, color: '#6a7086', fontSize: 13, background: 'none', border: 'none', width: '100%' }}>
+                        <button onClick={e => e.currentTarget.parentElement.querySelector('input').click()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 11, color: '#64748b', fontSize: 13, background: 'none', border: 'none', width: '100%' }}>
                           📷 Ota kuva / valitse galleriasta
                         </button>
                         <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => addPhotos(o.id, e.target.files)} />
@@ -654,7 +654,7 @@ export default function App({ profile, logout }) {
                 </div>
               </div>
             ))}
-            <button onClick={addObs} style={{ width: '100%', padding: 13, border: '1.5px dashed #b3b8c8', borderRadius: 12, background: 'none', color: '#6a7086', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <button onClick={addObs} style={{ width: '100%', padding: 13, border: '1.5px dashed #cbd3df', borderRadius: 14, background: 'none', color: '#64748b', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
               ＋ Lisää havainto
             </button>
           </div>
@@ -681,9 +681,9 @@ export default function App({ profile, logout }) {
       </div>
 
       {/* Bottom bar */}
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: 480, margin: '0 auto', background: '#f4f5f8', borderTop: '1px solid #d3d6e0', zIndex: 20 }}>
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: 480, margin: '0 auto', background: '#f4f6fa', borderTop: '1px solid #e3e8ef', zIndex: 20 }}>
         <div style={{ padding: '10px 16px env(safe-area-inset-bottom, 14px)', display: 'flex', gap: 10 }}>
-          <button onClick={exportPDF} style={{ flex: 1, padding: 13, background: '#17275c', border: 'none', borderRadius: 8, color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+          <button onClick={exportPDF} style={{ flex: 1, padding: 13, background: '#0a1428', border: 'none', borderRadius: 10, color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
             📄 Vie PDF-raportti
           </button>
         </div>
@@ -691,28 +691,28 @@ export default function App({ profile, logout }) {
 
       {/* PDF overlay */}
       {pdfMode && (
-        <div style={{ position: 'fixed', inset: 0, background: '#f4f5f8', zIndex: 100, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 12px', background: '#17275c' }}>
+        <div style={{ position: 'fixed', inset: 0, background: '#f4f6fa', zIndex: 100, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 12px', background: '#0a1428' }}>
             <button onClick={() => setPdfMode(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', width: 32, height: 32, borderRadius: '50%', fontSize: 18 }}>✕</button>
             <span style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>PDF valmis</span>
-            <button onClick={sharePDF} style={{ background: '#c7cbd6', border: 'none', color: '#17275c', fontSize: 13, fontWeight: 700, padding: '8px 16px', borderRadius: 8 }}>
+            <button onClick={sharePDF} style={{ background: '#c7cbd6', border: 'none', color: '#0a1428', fontSize: 13, fontWeight: 700, padding: '8px 16px', borderRadius: 10 }}>
               {shareSupported ? '⬆ Jaa' : '⬇ Lataa PDF'}
             </button>
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, padding: 32 }}>
             <div style={{ fontSize: 64 }}>{pdfDownloaded ? '✅' : '📄'}</div>
             {shareSupported ? (
-              <p style={{ fontSize: 14, color: '#6a7086', textAlign: 'center', lineHeight: 1.6 }}>
-                Paina <strong style={{ color: '#14183a' }}>Jaa ⬆</strong> avataksesi jakovalikon.
+              <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', lineHeight: 1.6 }}>
+                Paina <strong style={{ color: '#0f172a' }}>Jaa ⬆</strong> avataksesi jakovalikon.
               </p>
             ) : pdfDownloaded ? (
-              <p style={{ fontSize: 14, color: '#1a8a50', textAlign: 'center', lineHeight: 1.6, fontWeight: 600 }}>
+              <p style={{ fontSize: 14, color: '#059669', textAlign: 'center', lineHeight: 1.6, fontWeight: 600 }}>
                 PDF ladattu koneen Lataukset-kansioon.<br />
-                <span style={{ color: '#6a7086', fontWeight: 400 }}>({pdfName})</span>
+                <span style={{ color: '#64748b', fontWeight: 400 }}>({pdfName})</span>
               </p>
             ) : (
-              <p style={{ fontSize: 14, color: '#6a7086', textAlign: 'center', lineHeight: 1.6 }}>
-                Paina <strong style={{ color: '#14183a' }}>Lataa PDF</strong> tallentaaksesi tiedoston koneelle.
+              <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', lineHeight: 1.6 }}>
+                Paina <strong style={{ color: '#0f172a' }}>Lataa PDF</strong> tallentaaksesi tiedoston koneelle.
               </p>
             )}
           </div>
@@ -738,12 +738,12 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
 
   return (
     <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ background: '#fff', border: '1px solid #d3d6e0', borderRadius: 12, padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ background: '#fff', border: '1px solid #e3e8ef', borderRadius: 14, padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#6a7086', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
             {type === 'tr' ? 'TR-indeksi' : 'MVR-indeksi'}
           </div>
-          <div style={{ fontSize: 12, color: '#6a7086', marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
             {total ? `${oikein} oikein, ${vaarin} väärin (${total} havaintoa)` : 'Ei vielä havaintoja'}
           </div>
         </div>
@@ -762,24 +762,24 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
         const notes = cnt.notes || []
         const notesOpen = !!openNotes[c.key]
         return (
-          <div key={c.key} style={{ background: '#fff', border: '1px solid #d3d6e0', borderRadius: 12, padding: 12 }}>
+          <div key={c.key} style={{ background: '#fff', border: '1px solid #e3e8ef', borderRadius: 14, padding: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 2 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#14183a' }}>{c.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{c.label}</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: indexColor(cpct) }}>{cpct == null ? '–' : `${cpct}%`}</div>
             </div>
-            <div style={{ fontSize: 11.5, color: '#6a7086', marginBottom: 10, lineHeight: 1.4 }}>{c.desc}</div>
+            <div style={{ fontSize: 11.5, color: '#64748b', marginBottom: 10, lineHeight: 1.4 }}>{c.desc}</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => onBump(type, c.key, 'oikein', 1)} style={{ flex: 1, padding: '10px 4px', borderRadius: 8, border: '1px solid #1a8a50', background: 'rgba(26,138,80,0.1)', color: '#1a8a50', fontWeight: 700, fontSize: 13 }}>
+              <button onClick={() => onBump(type, c.key, 'oikein', 1)} style={{ flex: 1, padding: '10px 4px', borderRadius: 10, border: '1px solid #059669', background: 'rgba(5,150,105,0.1)', color: '#059669', fontWeight: 700, fontSize: 13 }}>
                 ✓ Oikein ({cnt.oikein})
               </button>
-              <button onClick={() => onBump(type, c.key, 'vaarin', 1)} style={{ flex: 1, padding: '10px 4px', borderRadius: 8, border: '1px solid #d63030', background: 'rgba(214,48,48,0.1)', color: '#d63030', fontWeight: 700, fontSize: 13 }}>
+              <button onClick={() => onBump(type, c.key, 'vaarin', 1)} style={{ flex: 1, padding: '10px 4px', borderRadius: 10, border: '1px solid #dc2626', background: 'rgba(220,38,38,0.1)', color: '#dc2626', fontWeight: 700, fontSize: 13 }}>
                 ✗ Väärin ({cnt.vaarin})
               </button>
               {(cnt.oikein > 0 || cnt.vaarin > 0) && (
                 <button onClick={() => {
                   if (cnt.vaarin > 0) onBump(type, c.key, 'vaarin', -1)
                   else if (cnt.oikein > 0) onBump(type, c.key, 'oikein', -1)
-                }} title="Kumoa viimeisin" style={{ padding: '10px 10px', borderRadius: 8, border: '1px solid #d3d6e0', background: '#eef0f5', color: '#6a7086', fontSize: 13 }}>
+                }} title="Kumoa viimeisin" style={{ padding: '10px 10px', borderRadius: 10, border: '1px solid #e3e8ef', background: '#f1f4f9', color: '#64748b', fontSize: 13 }}>
                   ↺
                 </button>
               )}
@@ -787,14 +787,14 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
 
             {/* Puutteet: vapaaehtoinen dokumentointi virallisen lomakkeen
                 Huomautukset/Vastuuhenkilö/Korjattu-sarakkeen tapaan. */}
-            <button onClick={() => toggleNotes(c.key)} style={{ marginTop: 10, background: 'none', border: 'none', padding: '4px 0', fontSize: 12, fontWeight: 700, color: notes.length ? '#d63030' : '#6a7086', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <button onClick={() => toggleNotes(c.key)} style={{ marginTop: 10, background: 'none', border: 'none', padding: '4px 0', fontSize: 12, fontWeight: 700, color: notes.length ? '#dc2626' : '#64748b', display: 'flex', alignItems: 'center', gap: 5 }}>
               {notesOpen ? '▾' : '▸'} 🗒 Puutteet {notes.length ? `(${notes.length})` : ''}
             </button>
 
             {notesOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, paddingTop: 10, borderTop: '1px solid #eef0f5' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, paddingTop: 10, borderTop: '1px solid #f1f4f9' }}>
                 {notes.map(n => (
-                  <div key={n.id} style={{ background: '#f9fafc', border: n.carried && !n.korjattu ? '1px solid #f0c36d' : '1px solid #eef0f5', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div key={n.id} style={{ background: '#f8fafc', border: n.carried && !n.korjattu ? '1px solid #f0c36d' : '1px solid #f1f4f9', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <div style={{ ...labelStyle, marginBottom: 0 }}>
                         Kuvaus puutteesta
@@ -802,7 +802,7 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
                           <span style={{ marginLeft: 6, color: '#a67c00', textTransform: 'none', fontWeight: 700, fontSize: 10.5 }}>↩ edelliseltä kierrokselta</span>
                         )}
                       </div>
-                      <button onClick={() => onRemoveNote(type, c.key, n.id)} style={{ background: 'none', border: 'none', color: '#6a7086', fontSize: 15 }}>🗑</button>
+                      <button onClick={() => onRemoveNote(type, c.key, n.id)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 15 }}>🗑</button>
                     </div>
                     <textarea style={{ ...selectStyle, resize: 'none', minHeight: 44, lineHeight: 1.4 }}
                       placeholder="esim. Suojakaide puuttuu tasolta 2" value={n.desc}
@@ -815,7 +815,7 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
                             onChange={e => onUpdateNote(type, c.key, n.id, { vastuuhenkilo: e.target.value })} />
                           {subcontractors.length > 0 && (
                             <button onClick={() => { setCustomVastuu(p => ({ ...p, [n.id]: false })); onUpdateNote(type, c.key, n.id, { vastuuhenkilo: '' }) }}
-                              title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 8, border: '1px solid #d3d6e0', background: '#eef0f5', color: '#6a7086', fontSize: 12 }}>↩</button>
+                              title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 10, border: '1px solid #e3e8ef', background: '#f1f4f9', color: '#64748b', fontSize: 12 }}>↩</button>
                           )}
                         </div>
                       ) : (
@@ -832,7 +832,7 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#14183a' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#0f172a' }}>
                         <input type="checkbox" checked={n.korjattu}
                           onChange={e => onUpdateNote(type, c.key, n.id, { korjattu: e.target.checked })} />
                         Korjattu
@@ -844,7 +844,7 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
                     </div>
                   </div>
                 ))}
-                <button onClick={() => onAddNote(type, c.key)} style={{ padding: '9px 4px', border: '1.5px dashed #b3b8c8', borderRadius: 8, background: 'none', color: '#6a7086', fontSize: 12.5 }}>
+                <button onClick={() => onAddNote(type, c.key)} style={{ padding: '9px 4px', border: '1.5px dashed #cbd3df', borderRadius: 10, background: 'none', color: '#64748b', fontSize: 12.5 }}>
                   ＋ Lisää puute
                 </button>
               </div>
@@ -853,26 +853,26 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
         )
       })}
 
-      <button onClick={() => onReset(type)} style={{ alignSelf: 'flex-end', background: 'none', border: 'none', fontSize: 11, color: '#6a7086', padding: '4px 0' }}>
+      <button onClick={() => onReset(type)} style={{ alignSelf: 'flex-end', background: 'none', border: 'none', fontSize: 11, color: '#64748b', padding: '4px 0' }}>
         🗑 Nollaa mittaus
       </button>
 
-      <div style={{ fontSize: 11, color: '#9aa2c0', lineHeight: 1.5, padding: '4px 2px 16px' }}>{legalNote}</div>
+      <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5, padding: '4px 2px 16px' }}>{legalNote}</div>
     </div>
   )
 }
 
 const inputStyle = {
-  background: '#fff', border: '1px solid #d3d6e0', borderRadius: 8,
-  color: '#14183a', fontSize: 14, padding: '9px 12px', width: '100%', outline: 'none',
+  background: '#fff', border: '1px solid #e3e8ef', borderRadius: 10,
+  color: '#0f172a', fontSize: 14, padding: '9px 12px', width: '100%', outline: 'none',
 }
 const selectStyle = {
-  background: '#fff', border: '1px solid #d3d6e0', borderRadius: 8,
-  color: '#14183a', fontSize: 14, padding: '9px 12px', width: '100%', outline: 'none',
+  background: '#fff', border: '1px solid #e3e8ef', borderRadius: 10,
+  color: '#0f172a', fontSize: 14, padding: '9px 12px', width: '100%', outline: 'none',
   WebkitAppearance: 'none', appearance: 'none',
 }
-const menuItem = { display: 'block', padding: '11px 14px', fontSize: 14, color: '#14183a', textDecoration: 'none', cursor: 'pointer' }
+const menuItem = { display: 'block', padding: '11px 14px', fontSize: 14, color: '#0f172a', textDecoration: 'none', cursor: 'pointer' }
 const labelStyle = {
-  fontSize: 11, fontWeight: 700, color: '#6a7086',
+  fontSize: 11, fontWeight: 700, color: '#64748b',
   letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 5,
 }

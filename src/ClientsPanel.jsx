@@ -170,12 +170,14 @@ export default function ClientsPanel({ onSitesChanged, showToast }) {
 }
 
 export const CLIENTS_CSS = `
-.kx-clients { display: flex; flex-direction: column; gap: 14px; }
-.kx-chip-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
-.kx-chip { display: inline-flex; align-items: center; gap: 4px; background: #eef0f5; border: 1px solid #d3d6e0; border-radius: 20px; padding: 4px 6px 4px 12px; font-size: 12.5px; font-weight: 700; color: #17275c; }
-.kx-chip button { background: none; border: none; color: #6a7086; font-size: 15px; cursor: pointer; padding: 0 4px; }
+.kx-clients { display: flex; flex-direction: column; gap: 16px; max-width: 980px; }
+.kx-chip-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.kx-chip { display: inline-flex; align-items: center; gap: 4px; background: #eef5ff; border: 1px solid #cfe3fb; border-radius: 20px; padding: 4px 6px 4px 12px; font-size: 13px; font-weight: 600; color: #0a3d7a; }
+.kx-chip button { background: none; border: none; color: #5b8cc4; font-size: 15px; cursor: pointer; padding: 0 4px; border-radius: 50%; }
+.kx-chip button:hover { color: #dc2626; }
 .kx-user-list { display: flex; flex-direction: column; margin-top: 6px; }
-.kx-user-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eef0f5; }
-.kx-user-name { font-size: 13.5px; font-weight: 700; color: #14183a; }
-.kx-user-sub { font-size: 11.5px; color: #6a7086; overflow: hidden; text-overflow: ellipsis; }
+.kx-user-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f1f4f9; }
+.kx-user-name { font-size: 14px; font-weight: 600; color: #0f172a; }
+.kx-user-sub { font-size: 12px; color: #64748b; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.kx-client-card .kx-label { margin-top: 18px !important; }
 `

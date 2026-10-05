@@ -152,7 +152,7 @@ export default function Dashboard({ profile, logout }) {
   }
 
   function obsUpdated(o) {
-    setObs(prev => prev.map(x => x.id === o.id ? { ...x, ...o } : x))
+    setObs(prev => prev.map(x => x.id === o.id ? { ...x, ...o, _origStatus: o.status, _dirty: false } : x))
     setReviewList(prev => prev.filter(x => x.id !== o.id || o.status === 'kuitattu'))
   }
 
@@ -455,7 +455,8 @@ export default function Dashboard({ profile, logout }) {
         <div className="kx-brand">
           <img className="kx-brand-mark" src="/korpnex-icon.png" alt="Korpnex" />
           <span className="kx-brand-name">KORPNEX</span>
-          <span className="kx-brand-sub">· {isC ? 'Valvomo' : (myClient?.name || 'Asiakasportaali')}</span>
+          <span className="kx-brand-pill">Työturvallisuus</span>
+          <span className="kx-brand-sub">{isC ? 'Valvomo' : (myClient?.name || 'Asiakasportaali')}</span>
         </div>
         <div className="kx-topbar-actions">
           {isC && (
@@ -467,8 +468,9 @@ export default function Dashboard({ profile, logout }) {
               <button className={view === 'asiakkaat' ? 'active' : ''} onClick={() => setView('asiakkaat')}>Asiakkaat</button>
             </div>
           )}
-          {isC && <a className="kx-btn-ghost kx-btn-onbrand kx-hide-mobile" href="/">📱 Kenttä</a>}
-          <button className="kx-btn-ghost kx-btn-onbrand" onClick={logout} title={profile?.email}>⎋ Ulos</button>
+          {isC && <a className="kx-btn-ghost kx-btn-sm kx-btn-onbrand kx-hide-mobile" href="/">📱 Kenttäsovellus</a>}
+          <span className="kx-user-chip">{profile?.name || profile?.email}</span>
+          <button className="kx-btn-ghost kx-btn-sm kx-btn-onbrand" onClick={logout} title={profile?.email}>Kirjaudu ulos</button>
         </div>
       </div>
 
@@ -606,12 +608,14 @@ export default function Dashboard({ profile, logout }) {
               <div className="kx-tabs">
                 {[
                   ['yhteenveto', 'Yhteenveto'],
-                  ['havainnot', `Havainnot${activeObs.length ? ` (${activeObs.length})` : ''}`],
-                  ['tr', `TR-mittaus${trResult.total ? ` (${trResult.pct}%)` : ''}`],
-                  ['mvr', `MVR-mittaus${mvrResult.total ? ` (${mvrResult.pct}%)` : ''}`],
-                  ...(isC ? [['aliurakoitsijat', `Aliurakoitsijat${subcontractors.length ? ` (${subcontractors.length})` : ''}`]] : []),
-                ].map(([key, label]) => (
-                  <button key={key} className={`kx-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}>{label}</button>
+                  ['havainnot', 'Havainnot', openCount + ackCount || null],
+                  ['tr', 'TR-mittaus', trResult.total ? `${trResult.pct} %` : null],
+                  ['mvr', 'MVR-mittaus', mvrResult.total ? `${mvrResult.pct} %` : null],
+                  ...(isC ? [['aliurakoitsijat', 'Aliurakoitsijat', subcontractors.length || null]] : []),
+                ].map(([key, label, count]) => (
+                  <button key={key} className={`kx-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}>
+                    {label}{count != null && <em className="kx-tab-count">{count}</em>}
+                  </button>
                 ))}
               </div>
 
@@ -620,23 +624,23 @@ export default function Dashboard({ profile, logout }) {
                   <div className="kx-overview-grid">
                     <div className="kx-card kx-kpis">
                       <button className="kx-kpi" onClick={() => { setTab('havainnot'); setObsFilter('avoimet') }}>
-                        <span className="kx-kpi-num" style={{ color: openCount ? '#d63030' : '#1a8a50' }}>{openCount}</span>
+                        <span className="kx-kpi-num" style={{ color: openCount ? '#dc2626' : '#059669' }}>{openCount}</span>
                         <span className="kx-kpi-label">Avoimet puutteet</span>
                       </button>
                       <button className="kx-kpi" onClick={() => { setTab('havainnot'); setObsFilter('odottaa') }}>
-                        <span className="kx-kpi-num" style={{ color: '#d07800' }}>{ackCount}</span>
+                        <span className="kx-kpi-num" style={{ color: '#d97706' }}>{ackCount}</span>
                         <span className="kx-kpi-label">Odottaa tarkastusta</span>
                       </button>
                       <button className="kx-kpi" onClick={() => { setTab('havainnot'); setObsFilter('korjatut') }}>
-                        <span className="kx-kpi-num" style={{ color: '#1a8a50' }}>{fixedCount}</span>
+                        <span className="kx-kpi-num" style={{ color: '#059669' }}>{fixedCount}</span>
                         <span className="kx-kpi-label">Korjattu</span>
                       </button>
                       <div className="kx-kpi">
-                        <span className="kx-kpi-num" style={{ color: lateCount ? '#d63030' : '#9aa2c0' }}>{lateCount}</span>
+                        <span className="kx-kpi-num" style={{ color: lateCount ? '#dc2626' : '#94a3b8' }}>{lateCount}</span>
                         <span className="kx-kpi-label">Myöhässä</span>
                       </div>
                       <div className="kx-kpi">
-                        <span className="kx-kpi-num" style={{ color: '#17275c' }}>{avgFixDays(activeObs) ?? '–'}</span>
+                        <span className="kx-kpi-num" style={{ color: '#0a1428' }}>{avgFixDays(activeObs) ?? '–'}</span>
                         <span className="kx-kpi-label">Korjausaika, pv (ka.)</span>
                       </div>
                     </div>
@@ -664,6 +668,9 @@ export default function Dashboard({ profile, logout }) {
                     obs={obs} showArchived={showArchivedObs} setShowArchived={setShowArchivedObs}
                     onChange={updateLocalObs} onSave={saveObs} onToggleArchive={toggleArchiveObs}
                     subcontractors={subcontractors} urls={urls} onOpenPhoto={setLightbox}
+                    reviewerName={profile?.name}
+                    onReviewed={u => { obsUpdated(u); loadReview(); showToast(u.status === 'korjattu' ? '✓ Merkitty korjatuksi' : '↩ Palautettu avoimeksi') }}
+                    onCancel={() => loadSite(selected.name)}
                   />
                 )}
 
@@ -768,11 +775,20 @@ function avgFixDays(obs) {
 // TR-/MVR-indeksin kehitys ajan yli (yksinkertainen SVG-viivakaavio).
 function TrendCard({ trRows, mvrRows }) {
   const series = [
-    { key: 'TR', color: '#223a8c', pts: trRows.filter(r => r.index_pct != null).map(r => ({ t: new Date(r.created_at).getTime(), v: Number(r.index_pct) })).reverse() },
+    { key: 'TR', color: '#0878E8', pts: trRows.filter(r => r.index_pct != null).map(r => ({ t: new Date(r.created_at).getTime(), v: Number(r.index_pct) })).reverse() },
     { key: 'MVR', color: '#20a0c8', pts: mvrRows.filter(r => r.index_pct != null).map(r => ({ t: new Date(r.created_at).getTime(), v: Number(r.index_pct) })).reverse() },
   ].filter(s => s.pts.length)
   const all = series.flatMap(s => s.pts)
-  const W = 900, H = 210, P = { l: 34, r: 14, t: 12, b: 26 }
+  const boxRef = useRef(null)
+  const [boxW, setBoxW] = useState(800)
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([e]) => setBoxW(Math.max(260, Math.round(e.contentRect.width))))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const W = boxW, H = boxW < 500 ? 170 : 220, P = { l: 30, r: 10, t: 12, b: 26 }
   let body
   if (all.length < 2) {
     body = <div className="kx-empty-note">Kaavio näkyy, kun mittauksia on vähintään kaksi.</div>
@@ -786,13 +802,13 @@ function TrendCard({ trRows, mvrRows }) {
       <svg viewBox={`0 0 ${W} ${H}`} className="kx-trend-svg">
         {ticks.map(v => (
           <g key={v}>
-            <line x1={P.l} x2={W - P.r} y1={y(v)} y2={y(v)} stroke="#eef0f5" />
-            <text x={P.l - 6} y={y(v) + 3.5} fontSize="10" textAnchor="end" fill="#9aa2c0">{v}</text>
+            <line x1={P.l} x2={W - P.r} y1={y(v)} y2={y(v)} stroke="#f1f4f9" />
+            <text x={P.l - 6} y={y(v) + 3.5} fontSize="10" textAnchor="end" fill="#94a3b8">{v}</text>
           </g>
         ))}
-        {vMin < 90 && <line x1={P.l} x2={W - P.r} y1={y(90)} y2={y(90)} stroke="#1a8a50" strokeDasharray="4 4" opacity=".5" />}
-        <text x={P.l} y={H - 8} fontSize="10" fill="#9aa2c0">{new Date(t0).toLocaleDateString('fi-FI')}</text>
-        <text x={W - P.r} y={H - 8} fontSize="10" fill="#9aa2c0" textAnchor="end">{new Date(t1).toLocaleDateString('fi-FI')}</text>
+        {vMin < 90 && <line x1={P.l} x2={W - P.r} y1={y(90)} y2={y(90)} stroke="#059669" strokeDasharray="4 4" opacity=".5" />}
+        <text x={P.l} y={H - 8} fontSize="10" fill="#94a3b8">{new Date(t0).toLocaleDateString('fi-FI')}</text>
+        <text x={W - P.r} y={H - 8} fontSize="10" fill="#94a3b8" textAnchor="end">{new Date(t1).toLocaleDateString('fi-FI')}</text>
         {series.map(s => (
           <g key={s.key}>
             <polyline fill="none" stroke={s.color} strokeWidth="2.5" points={s.pts.map(p => `${x(p.t)},${y(p.v)}`).join(' ')} />
@@ -803,12 +819,12 @@ function TrendCard({ trRows, mvrRows }) {
     )
   }
   return (
-    <div className="kx-card kx-trend">
+    <div className="kx-card kx-trend" ref={boxRef}>
       <div className="kx-measure-summary-head">
         <div className="kx-card-title" style={{ marginBottom: 0 }}>Turvallisuusindeksin kehitys</div>
         <div className="kx-trend-legend">
           {series.map(s => <span key={s.key}><i style={{ background: s.color }} />{s.key}</span>)}
-          <span><i style={{ background: '#1a8a50', opacity: .5 }} />tavoite 90 %</span>
+          <span><i style={{ background: '#059669', opacity: .5 }} />tavoite 90 %</span>
         </div>
       </div>
       {body}
@@ -855,7 +871,7 @@ function MeasurementHistory({ type, categories, legalNote, rows }) {
                       {notes.map(n => (
                         <div key={n.id} className="kx-note-item">
                           <div style={{ fontSize: 13, fontWeight: 700 }}>{n.desc}</div>
-                          <div className="kx-hint">{n.cat}{n.vastuuhenkilo ? ` · vastuu: ${n.vastuuhenkilo}` : ''} · {n.korjattu ? <b style={{ color: '#1a8a50' }}>Korjattu {n.korjattuPvm ? new Date(n.korjattuPvm).toLocaleDateString('fi-FI') : ''}</b> : <b style={{ color: '#d63030' }}>Avoin</b>}</div>
+                          <div className="kx-hint">{n.cat}{n.vastuuhenkilo ? ` · vastuu: ${n.vastuuhenkilo}` : ''} · {n.korjattu ? <b style={{ color: '#059669' }}>Korjattu {n.korjattuPvm ? new Date(n.korjattuPvm).toLocaleDateString('fi-FI') : ''}</b> : <b style={{ color: '#dc2626' }}>Avoin</b>}</div>
                         </div>
                       ))}
                     </div>
@@ -917,7 +933,7 @@ function MeasurementSummary({ title, categories, row }) {
 // (ks. shared.js:n summarizeObservations), joten näkymä ja raportti täsmäävät.
 function WorksiteSummary({ obs }) {
   const summary = summarizeObservations(obs)
-  const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
+  const sevColor = { Kriittinen: '#dc2626', Huomio: '#d97706', Info: '#059669' }
   return (
     <div className="kx-card kx-worksite-summary">
       <div className="kx-card-title">Työmaan kokonaisyhteenveto (koko historia)</div>
@@ -930,8 +946,8 @@ function WorksiteSummary({ obs }) {
             <span className="kx-badge" style={{ color: sevColor.Kriittinen }}>Kriittinen {summary.bySev.Kriittinen}</span>
             <span className="kx-badge" style={{ color: sevColor.Huomio }}>Huomio {summary.bySev.Huomio}</span>
             <span className="kx-badge" style={{ color: sevColor.Info }}>Info {summary.bySev.Info}</span>
-            <span className="kx-badge" style={{ color: '#d07800' }}>Avoinna {summary.byStatus.avoin}</span>
-            <span className="kx-badge" style={{ color: '#1a8a50' }}>Korjattu {summary.byStatus.korjattu}</span>
+            <span className="kx-badge" style={{ color: '#d97706' }}>Avoinna {summary.byStatus.avoin}</span>
+            <span className="kx-badge" style={{ color: '#059669' }}>Korjattu {summary.byStatus.korjattu}</span>
           </div>
           <div className="kx-table-wrap">
             <table className="kx-yritys-table">
@@ -953,7 +969,7 @@ function WorksiteSummary({ obs }) {
                     <td style={{ color: sevColor.Kriittinen }}>{row.Kriittinen || ''}</td>
                     <td style={{ color: sevColor.Huomio }}>{row.Huomio || ''}</td>
                     <td style={{ color: sevColor.Info }}>{row.Info || ''}</td>
-                    <td style={{ color: row.avoin ? '#d07800' : '#9aa2c0' }}>{row.avoin}</td>
+                    <td style={{ color: row.avoin ? '#d97706' : '#94a3b8' }}>{row.avoin}</td>
                   </tr>
                 ))}
               </tbody>
@@ -970,26 +986,43 @@ function WorksiteSummary({ obs }) {
 // Ei automaattitallennusta — muutokset kootaan korttiin ja tallennetaan
 // eksplisiittisesti "Tallenna muutokset" -napista, jotta hallintakäyttö
 // pysyy ennustettavana eikä lähetä kymmeniä pyyntöjä joka näppäimestä.
-function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSave, onToggleArchive, subcontractors, urls = {}, onOpenPhoto }) {
-  const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
-  const sevBg = { Kriittinen: 'rgba(214,48,48,0.1)', Huomio: 'rgba(245,168,0,0.12)', Info: 'rgba(26,138,80,0.1)' }
-  const list = obs.filter(o => showArchived ? o.archived : !o.archived)
+function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSave, onToggleArchive, subcontractors, urls = {}, onOpenPhoto, onReviewed, reviewerName, onCancel }) {
+  const [editing, setEditing] = useState({})
+  const [filter, setFilter] = useState('kaikki')
+  const sevColor = { Kriittinen: '#dc2626', Huomio: '#d97706', Info: '#059669' }
+  const sevBg = { Kriittinen: 'rgba(220,38,38,0.1)', Huomio: 'rgba(245,168,0,0.12)', Info: 'rgba(5,150,105,0.1)' }
+  const base = obs.filter(o => showArchived ? o.archived : !o.archived)
+  const cnt = k => base.filter(o => o.status === k).length
+  const list = base.filter(o => filter === 'kaikki' || o.status === filter)
   // Mitkä havaintojen Yritys-kentät ovat "kirjoita itse" -tilassa.
   const [yritysCustom, setYritysCustom] = useState({})
   return (
     <div className="kx-obs-panel">
-      <label className="kx-checkbox-row">
-        <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
-        Näytä arkistoidut havainnot
-      </label>
+      <div className="kx-filter-row" style={{ alignItems: 'center' }}>
+        {[['kaikki', `Kaikki (${base.length})`], ['avoin', `Avoimet (${cnt('avoin')})`], ['kuitattu', `Odottaa tarkastusta (${cnt('kuitattu')})`], ['korjattu', `Korjatut (${cnt('korjattu')})`]].map(([k, l]) => (
+          <button key={k} className={`kx-filter ${filter === k ? 'active' : ''}`} onClick={() => setFilter(k)}>{l}</button>
+        ))}
+        <label className="kx-checkbox-row" style={{ margin: '0 0 0 auto' }}>
+          <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
+          Arkistoidut
+        </label>
+      </div>
       {list.length === 0 && (
         <div className="kx-empty-note">{showArchived ? 'Ei arkistoituja havaintoja.' : 'Ei havaintoja tällä työmaalla.'}</div>
       )}
       <div className="kx-obs-grid">
-        {list.map(o => (
-          <div key={o.id} className="kx-card kx-obs-card">
+        {list.map(o => !editing[o.id] && !o._dirty ? (
+          <ObsCard key={o.id} o={o} urls={urls} onOpenPhoto={onOpenPhoto}>
+            {o.status === 'kuitattu' && !o.archived && <ReviewAction o={o} reviewerName={reviewerName} onDone={onReviewed} />}
+            <div className="kx-obs-card-foot">
+              <button className="kx-btn-ghost kx-btn-sm" onClick={() => onToggleArchive(o)}>{o.archived ? '↺ Palauta' : 'Arkistoi'}</button>
+              <button className="kx-btn-ghost kx-btn-sm" onClick={() => setEditing(p => ({ ...p, [o.id]: true }))}>✏️ Muokkaa</button>
+            </div>
+          </ObsCard>
+        ) : (
+          <div key={o.id} className="kx-card kx-obs-card" style={{ borderColor: '#9cc7f5', boxShadow: '0 0 0 3px rgba(8,120,232,.08)' }}>
             <div className="kx-obs-card-head">
-              <span className="kx-obs-index">Havainto</span>
+              <span className="kx-obs-index">Muokataan havaintoa</span>
               <div className="kx-obs-tags">
                 <span className="kx-tag" style={{ background: sevBg[o.sev], color: sevColor[o.sev] }}>{o.sev}</span>
                 <StatusTag status={o.status} />
@@ -1031,11 +1064,7 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
               <div className="kx-label">Vakavuus</div>
               <div className="kx-btn-choice-row">
                 {SEV_LABELS.map(s => (
-                  <button key={s} className="kx-choice-btn" style={{
-                    borderColor: o.sev === s ? sevColor[s] : '#d3d6e0',
-                    background: o.sev === s ? sevBg[s] : '#f4f5f8',
-                    color: o.sev === s ? sevColor[s] : '#6a7086',
-                  }} onClick={() => onChange(o.id, 'sev', s)}>{s}</button>
+                  <button key={s} className={`kx-choice-btn ${o.sev === s ? 'active' : ''}`} style={o.sev === s ? { color: sevColor[s] } : undefined} onClick={() => onChange(o.id, 'sev', s)}>{s}</button>
                 ))}
               </div>
             </div>
@@ -1043,11 +1072,7 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
               <div className="kx-label">Tila</div>
               <div className="kx-btn-choice-row">
                 {['avoin', ...(o.status === 'kuitattu' ? ['kuitattu'] : []), 'korjattu'].map(s => (
-                  <button key={s} className="kx-choice-btn" style={{
-                    borderColor: o.status === s ? '#17275c' : '#d3d6e0',
-                    background: o.status === s ? '#eef0f5' : '#f4f5f8',
-                    color: o.status === s ? '#17275c' : '#6a7086',
-                  }} onClick={() => onChange(o.id, 'status', s)}>{s === 'korjattu' ? '✓ Korjattu' : s === 'kuitattu' ? 'Kuitattu (asiakas)' : 'Avoin'}</button>
+                  <button key={s} className={`kx-choice-btn ${o.status === s ? 'active' : ''}`} style={o.status === s ? { color: s === 'korjattu' ? '#059669' : s === 'kuitattu' ? '#b45309' : '#dc2626' } : undefined} onClick={() => onChange(o.id, 'status', s)}>{s === 'korjattu' ? '✓ Korjattu' : s === 'kuitattu' ? 'Kuitattu (asiakas)' : 'Avoin'}</button>
                 ))}
               </div>
             </div>
@@ -1072,17 +1097,17 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
             )}
             {(o.ack_at || o.status === 'korjattu' || o.reopen_comment) && (
               <div className="kx-timeline">
-                {o.reopen_comment && o.status === 'avoin' && <div style={{ color: '#d63030' }}>↩ Palautettu: {o.reopen_comment}</div>}
-                {o.ack_at && <div>🟡 {o.ack_by_name} kuittasi {new Date(o.ack_at).toLocaleDateString('fi-FI')}{o.ack_comment ? ` — "${o.ack_comment}"` : ''}</div>}
-                {o.status === 'korjattu' && o.fixed_at && <div>🟢 Varmistettu {new Date(o.fixed_at).toLocaleDateString('fi-FI')}{o.fixed_by_name ? ` · ${o.fixed_by_name}` : ''}</div>}
+                {o.reopen_comment && o.status === 'avoin' && <div className="kx-tl-red" style={{ color: '#dc2626' }}>Palautettu: {o.reopen_comment}</div>}
+                {o.ack_at && <div className="kx-tl-amber">{o.ack_by_name} kuittasi {new Date(o.ack_at).toLocaleDateString('fi-FI')}{o.ack_comment ? ` — "${o.ack_comment}"` : ''}</div>}
+                {o.status === 'korjattu' && o.fixed_at && <div className="kx-tl-green">Varmistettu {new Date(o.fixed_at).toLocaleDateString('fi-FI')}{o.fixed_by_name ? ` · ${o.fixed_by_name}` : ''}</div>}
               </div>
             )}
             {o.created_at && (
               <div className="kx-obs-meta">🕒 {new Date(o.created_at).toLocaleString('fi-FI', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
             )}
             <div className="kx-obs-card-foot">
-              <button className="kx-btn-ghost kx-btn-sm" onClick={() => onToggleArchive(o)}>{o.archived ? '↺ Palauta' : '🗄 Arkistoi'}</button>
-              <button className="kx-btn-primary kx-btn-sm" disabled={!o._dirty} onClick={() => onSave(o)}>
+              <button className="kx-btn-ghost kx-btn-sm" onClick={() => { setEditing(p => ({ ...p, [o.id]: false })); if (o._dirty) onCancel?.(o) }}>{o._dirty ? 'Peruuta' : 'Sulje'}</button>
+              <button className="kx-btn-primary kx-btn-sm" disabled={!o._dirty} onClick={async () => { await onSave(o); setEditing(p => ({ ...p, [o.id]: false })) }}>
                 {o._dirty ? 'Tallenna muutokset' : 'Tallennettu ✓'}
               </button>
             </div>
@@ -1163,7 +1188,7 @@ function MeasurementPanel({ type, categories, legalNote, rows, editMeasure, subc
                           )}
                         </div>
 
-                        <button className="kx-note-toggle" onClick={() => toggleNotes(c.key)} style={{ color: notes.length ? '#d63030' : '#6a7086' }}>
+                        <button className="kx-note-toggle" onClick={() => toggleNotes(c.key)} style={{ color: notes.length ? '#dc2626' : '#64748b' }}>
                           {notesOpen ? '▾' : '▸'} 🗒 Puutteet {notes.length ? `(${notes.length})` : ''}
                         </button>
 
@@ -1280,198 +1305,221 @@ function SubcontractorsPanel({ active, archived, showArchived, setShowArchived, 
 }
 
 const DASHBOARD_CSS = `
-.kx-dashboard { min-height: 100%; background: #eef0f5; color: #14183a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+.kx-dashboard { min-height: 100%; background: #f4f6fa; color: #0f172a; font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; }
 .kx-dashboard * { box-sizing: border-box; }
-.kx-topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: #17275c; position: sticky; top: 0; z-index: 20; }
-.kx-brand { display: flex; align-items: center; gap: 8px; }
-.kx-brand-mark { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; display: block; }
-.kx-brand-name { font-size: 17px; font-weight: 800; color: #fff; letter-spacing: 0.5px; }
-.kx-brand-sub { font-size: 11px; color: rgba(255,255,255,0.55); font-weight: 500; margin-left: 2px; }
-.kx-topbar-actions { display: flex; align-items: center; gap: 8px; }
-.kx-btn-onbrand { background: rgba(255,255,255,0.15); color: #fff; border: none; text-decoration: none; }
-.kx-btn-onbrand:hover { background: rgba(255,255,255,0.25); }
 
-.kx-shell { display: flex; align-items: flex-start; gap: 20px; max-width: 1180px; margin: 0 auto; padding: 20px; }
-.kx-sidebar { flex: 0 0 260px; background: #fff; border: 1px solid #d3d6e0; border-radius: 12px; padding: 14px; position: sticky; top: 76px; }
-.kx-sidebar-head { font-size: 11px; font-weight: 700; color: #6a7086; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px; }
-.kx-site-list { display: flex; flex-direction: column; gap: 3px; max-height: 40vh; overflow-y: auto; margin-bottom: 8px; }
-.kx-site-row { display: flex; align-items: center; justify-content: space-between; border-radius: 8px; padding: 2px; }
-.kx-site-row.active { background: #eef0f5; }
-.kx-site-name { flex: 1; text-align: left; background: none; border: none; padding: 8px 8px; font-size: 13.5px; font-weight: 600; color: #14183a; border-radius: 8px; cursor: pointer; }
-.kx-site-name:hover { background: #f4f5f8; }
-.kx-site-row.active .kx-site-name { color: #17275c; font-weight: 800; }
-.kx-site-name-static { flex: 1; padding: 8px 8px; font-size: 13px; color: #6a7086; }
-.kx-site-actions { display: flex; gap: 6px; opacity: 1; align-items: center; }
-.kx-icon-btn { background: none; border: none; font-size: 13px; padding: 5px 6px; border-radius: 6px; cursor: pointer; color: #6a7086; }
-.kx-icon-btn:hover { background: #eef0f5; }
-.kx-icon-btn-danger { font-size: 11px; font-weight: 700; padding: 5px 8px; color: #a65b00; background: rgba(208,120,0,0.1); white-space: nowrap; }
-.kx-icon-btn-danger:hover { background: rgba(208,120,0,0.2); }
-.kx-delete-btn { background: rgba(214,48,48,0.1); border: 1px solid rgba(214,48,48,0.3); border-radius: 8px; color: #d63030; font-size: 12px; font-weight: 700; padding: 6px 10px; cursor: pointer; }
-.kx-delete-btn:hover { background: rgba(214,48,48,0.2); }
+/* Yläpalkki */
+.kx-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; background: linear-gradient(180deg, #0a1428 0%, #0c1830 100%); border-bottom: 1px solid rgba(255,255,255,.06); position: sticky; top: 0; z-index: 30; }
+.kx-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.kx-brand-mark { width: 36px; height: 36px; border-radius: 9px; object-fit: cover; display: block; flex-shrink: 0; }
+.kx-brand-name { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 16px; font-weight: 800; color: #fff; letter-spacing: 3px; }
+.kx-brand-sub { font-size: 13px; color: rgba(255,255,255,.62); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kx-brand-pill { font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #7cc8ff; background: rgba(32,184,255,.12); border: 1px solid rgba(32,184,255,.28); padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+.kx-topbar-actions { display: flex; align-items: center; gap: 10px; }
+.kx-viewswitch { display: flex; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); border-radius: 11px; padding: 3px; gap: 2px; }
+.kx-viewswitch button { background: none; border: none; color: rgba(255,255,255,.7); font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; transition: background .15s, color .15s; }
+.kx-viewswitch button:hover:not(.active) { color: #fff; background: rgba(255,255,255,.06); }
+.kx-viewswitch button.active { background: #fff; color: #0a1428; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.kx-count-pill { background: #f59e0b; color: #1f1300; border-radius: 10px; font-size: 11px; font-weight: 800; padding: 1px 7px; line-height: 16px; }
+.kx-user-chip { font-size: 12.5px; color: rgba(255,255,255,.6); white-space: nowrap; }
+.kx-btn-onbrand { background: rgba(255,255,255,.08) !important; color: #fff !important; border: 1px solid rgba(255,255,255,.12) !important; text-decoration: none; }
+.kx-btn-onbrand:hover { background: rgba(255,255,255,.16) !important; }
+
+/* Rakenne */
+.kx-shell { display: flex; align-items: flex-start; gap: 24px; max-width: 1240px; margin: 0 auto; padding: 24px; }
+.kx-shell-single { display: block; }
+.kx-main { flex: 1; min-width: 0; }
+
+/* Sivupalkki */
+.kx-sidebar { flex: 0 0 264px; background: #fff; border: 1px solid #e3e8ef; border-radius: 16px; padding: 14px; position: sticky; top: 84px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.kx-sidebar-head { font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: .8px; text-transform: uppercase; margin: 2px 6px 10px; }
+.kx-site-list { display: flex; flex-direction: column; gap: 2px; max-height: 52vh; overflow-y: auto; margin-bottom: 10px; }
+.kx-site-row { position: relative; display: flex; align-items: center; justify-content: space-between; border-radius: 10px; padding: 2px; transition: background .15s; }
+.kx-site-row:hover { background: #f8fafc; }
+.kx-site-row.active { background: #eef5ff; }
+.kx-site-row.active::before { content: ''; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: #0878E8; }
+.kx-site-name { flex: 1; min-width: 0; text-align: left; background: none; border: none; padding: 9px 10px; font-size: 14px; font-weight: 600; color: #0f172a; border-radius: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.kx-site-row.active .kx-site-name { color: #0a1428; font-weight: 700; }
+.kx-site-client { font-size: 11.5px; font-weight: 500; color: #94a3b8; }
+.kx-site-row.active .kx-site-client { color: #4a8fe0; }
+.kx-site-name-static { flex: 1; padding: 8px 10px; font-size: 13px; color: #64748b; }
+.kx-site-actions { display: flex; gap: 2px; align-items: center; opacity: 0; transition: opacity .15s; }
+.kx-site-row:hover .kx-site-actions, .kx-site-row.active .kx-site-actions { opacity: 1; }
+.kx-icon-btn { background: none; border: none; font-size: 13px; padding: 6px 7px; border-radius: 8px; cursor: pointer; color: #64748b; line-height: 1; }
+.kx-icon-btn:hover { background: #e8edf4; color: #0f172a; }
+.kx-icon-btn-danger:hover { background: #fff1e6; }
 .kx-site-edit { display: flex; align-items: center; gap: 4px; width: 100%; }
 .kx-add-row { margin-top: 4px; }
-.kx-add-site-btn { width: 100%; padding: 9px; border: 1.5px dashed #b3b8c8; border-radius: 8px; background: none; color: #6a7086; font-size: 13px; cursor: pointer; }
-.kx-add-site-btn:hover { background: #f4f5f8; }
-.kx-archived-toggle { width: 100%; text-align: left; background: none; border: none; font-size: 11.5px; color: #6a7086; padding: 10px 2px 2px; cursor: pointer; border-top: 1px solid #eef0f5; margin-top: 10px; }
+.kx-add-site-btn { width: 100%; padding: 10px; border: 1.5px dashed #cbd3df; border-radius: 10px; background: none; color: #64748b; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; }
+.kx-add-site-btn:hover { border-color: #0878E8; color: #0878E8; background: #f5f9ff; }
+.kx-archived-toggle { width: 100%; text-align: left; background: none; border: none; font-size: 12px; color: #94a3b8; padding: 12px 6px 2px; cursor: pointer; border-top: 1px solid #eef1f6; margin-top: 12px; }
 .kx-archived-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; max-height: 24vh; overflow-y: auto; }
 
-.kx-main { flex: 1; min-width: 0; }
-.kx-empty-main { background: #fff; border: 1px solid #d3d6e0; border-radius: 12px; padding: 48px 24px; text-align: center; color: #6a7086; font-size: 14px; }
-.kx-main-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
-.kx-main-title { font-size: 22px; font-weight: 800; color: #17275c; }
-.kx-main-sub { font-size: 12.5px; color: #6a7086; margin-top: 2px; }
+/* Pääotsikko */
+.kx-empty-main { background: #fff; border: 1px solid #e3e8ef; border-radius: 16px; padding: 56px 32px; text-align: center; color: #64748b; font-size: 15px; line-height: 1.6; }
+.kx-main-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; gap: 16px; flex-wrap: wrap; }
+.kx-main-title { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 26px; font-weight: 800; color: #0a1428; letter-spacing: -.4px; line-height: 1.15; }
+.kx-main-sub { font-size: 13.5px; color: #64748b; margin-top: 4px; }
 .kx-main-head-actions { display: flex; gap: 8px; }
-.kx-btn-primary { background: #17275c; border: none; border-radius: 8px; color: #fff; font-size: 13.5px; font-weight: 700; padding: 10px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.kx-btn-primary:hover { background: #223a8c; }
-.kx-btn-primary:disabled { opacity: 0.45; cursor: default; background: #9aa2c0; }
-.kx-btn-ghost { background: #eef0f5; border: 1px solid #d3d6e0; border-radius: 8px; color: #3a3f5c; font-size: 13px; font-weight: 700; padding: 9px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.kx-btn-ghost:hover { background: #e2e5ee; }
-.kx-btn-sm { padding: 6px 10px; font-size: 12px; }
-.kx-error { background: rgba(214,48,48,0.08); color: #d63030; border: 1px solid rgba(214,48,48,0.3); border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; }
+.kx-client-select { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; color: #64748b; font-weight: 600; flex-wrap: wrap; }
+.kx-client-select select { width: auto; max-width: 300px; }
 
-.kx-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid #d3d6e0; flex-wrap: wrap; }
-.kx-tab { padding: 10px 16px; border-radius: 10px 10px 0 0; font-size: 13px; font-weight: 700; border: none; border-bottom: 3px solid transparent; background: none; color: #6a7086; cursor: pointer; }
-.kx-tab.active { border-bottom: 3px solid #223a8c; color: #17275c; background: #fff; }
-.kx-tab:hover:not(.active) { color: #17275c; }
+/* Napit */
+.kx-btn-primary { background: #0878E8; border: 1px solid #0878E8; border-radius: 10px; color: #fff; font-size: 13.5px; font-weight: 600; padding: 9px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; box-shadow: 0 1px 2px rgba(8,120,232,.25), inset 0 1px 0 rgba(255,255,255,.15); transition: background .15s, transform .05s; text-decoration: none; }
+.kx-btn-primary:hover { background: #0667c9; }
+.kx-btn-primary:active { transform: translateY(1px); }
+.kx-btn-primary:disabled { opacity: .5; cursor: default; background: #94a3b8; border-color: #94a3b8; box-shadow: none; }
+.kx-btn-ghost { background: #fff; border: 1px solid #dbe1ea; border-radius: 10px; color: #334155; font-size: 13.5px; font-weight: 600; padding: 9px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: all .15s; text-decoration: none; }
+.kx-btn-ghost:hover { background: #f8fafc; border-color: #cbd3df; }
+.kx-btn-sm { padding: 6px 11px; font-size: 12.5px; border-radius: 8px; }
+.kx-delete-btn { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #dc2626; font-size: 12px; font-weight: 600; padding: 6px 10px; cursor: pointer; }
+.kx-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
 
-.kx-card { background: #fff; border: 1px solid #d3d6e0; border-radius: 12px; padding: 14px; }
-.kx-card-title { font-size: 13px; font-weight: 800; color: #17275c; margin-bottom: 10px; }
+/* Välilehdet */
+.kx-tabs { display: flex; gap: 22px; margin-bottom: 20px; border-bottom: 1px solid #e3e8ef; overflow-x: auto; scrollbar-width: none; }
+.kx-tab { padding: 10px 0 12px; font-size: 14px; font-weight: 600; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: #64748b; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; transition: color .15s; }
+.kx-tab:hover:not(.active) { color: #0f172a; }
+.kx-tab.active { border-bottom-color: #0878E8; color: #0a1428; }
+.kx-tab-count { font-style: normal; font-size: 11.5px; font-weight: 700; background: #eef1f6; color: #64748b; padding: 1px 8px; border-radius: 10px; }
+.kx-tab.active .kx-tab-count { background: #0878E8; color: #fff; }
 
-.kx-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
-.kx-recent-obs { grid-column: 1 / -1; }
-.kx-worksite-summary { grid-column: 1 / -1; }
-.kx-summary-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-.kx-badge { font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 20px; background: #f4f5f8; color: #3a3f5c; }
-.kx-badge-main { background: #17275c; color: #fff; }
+/* Kortit */
+.kx-card { background: #fff; border: 1px solid #e3e8ef; border-radius: 16px; padding: 18px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.kx-card-title { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 14.5px; font-weight: 700; color: #0a1428; margin-bottom: 12px; }
+.kx-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.kx-recent-obs, .kx-worksite-summary, .kx-trend { grid-column: 1 / -1; }
+
+/* Tunnusluvut */
+.kx-kpis { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; background: none; border: none; padding: 0; box-shadow: none; }
+.kx-kpi { position: relative; background: #fff; border: 1px solid #e3e8ef; border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column-reverse; gap: 6px; text-align: left; font-family: inherit; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+button.kx-kpi { cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; }
+button.kx-kpi:hover { border-color: #cbd3df; box-shadow: 0 6px 18px rgba(15,23,42,.07); transform: translateY(-1px); }
+.kx-kpi-num { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -.5px; }
+.kx-kpi-label { font-size: 12.5px; color: #64748b; font-weight: 600; }
+
+.kx-summary-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.kx-badge { font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 20px; background: #f1f4f9; color: #334155; }
+.kx-badge-main { background: #0a1428; color: #fff; }
 .kx-table-wrap { overflow-x: auto; }
-.kx-yritys-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.kx-yritys-table th { text-align: right; font-size: 10.5px; font-weight: 700; color: #6a7086; text-transform: uppercase; letter-spacing: 0.4px; padding: 6px 8px; border-bottom: 1px solid #d3d6e0; white-space: nowrap; }
+.kx-yritys-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.kx-yritys-table th { text-align: right; font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .5px; padding: 8px 10px; border-bottom: 1px solid #e3e8ef; white-space: nowrap; }
 .kx-yritys-table th:first-child { text-align: left; }
-.kx-yritys-table td { text-align: right; padding: 8px; border-bottom: 1px solid #eef0f5; color: #14183a; font-weight: 600; white-space: nowrap; }
-.kx-yritys-table td:first-child { text-align: left; font-weight: 700; white-space: normal; }
+.kx-yritys-table td { text-align: right; padding: 10px; border-bottom: 1px solid #f1f4f9; color: #0f172a; font-weight: 600; white-space: nowrap; }
+.kx-yritys-table td:first-child { text-align: left; white-space: normal; }
+.kx-yritys-table tbody tr:hover td { background: #f8fafc; }
 .kx-yritys-table tbody tr:last-child td { border-bottom: none; }
-.kx-recent-obs-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #eef0f5; font-size: 13px; }
+.kx-recent-obs-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f1f4f9; font-size: 13.5px; }
 .kx-recent-obs-row:last-child { border-bottom: none; }
 .kx-sev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.kx-sev-dot.sev-Kriittinen { background: #d63030; }
-.kx-sev-dot.sev-Huomio { background: #d07800; }
-.kx-sev-dot.sev-Info { background: #1a8a50; }
-.kx-recent-obs-text { flex: 1; color: #14183a; }
-.kx-recent-obs-date { color: #9aa2c0; font-size: 11.5px; flex-shrink: 0; }
+.kx-sev-dot.sev-Kriittinen { background: #dc2626; box-shadow: 0 0 0 3px rgba(220,38,38,.12); }
+.kx-sev-dot.sev-Huomio { background: #d97706; box-shadow: 0 0 0 3px rgba(217,119,6,.12); }
+.kx-sev-dot.sev-Info { background: #059669; box-shadow: 0 0 0 3px rgba(5,150,105,.12); }
+.kx-recent-obs-text { flex: 1; color: #0f172a; font-weight: 500; }
+.kx-recent-obs-date { color: #94a3b8; font-size: 12px; flex-shrink: 0; }
 
-.kx-measure-summary-head { display: flex; align-items: center; justify-content: space-between; }
-.kx-measure-summary-title { font-size: 13px; font-weight: 800; color: #17275c; }
-.kx-measure-summary-sub { font-size: 11.5px; color: #6a7086; margin-top: 2px; }
-.kx-measure-summary-pct { font-size: 26px; font-weight: 800; }
-.kx-measure-summary-cats { border-top: 1px solid #eef0f5; margin-top: 10px; padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
-.kx-measure-summary-cat-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
-.kx-measure-summary-cat-label { color: #3a3f5c; }
-.kx-measure-summary-cat-vals { color: #9aa2c0; }
-.kx-measure-summary-cat-vals .ok { color: #1a8a50; }
-.kx-measure-summary-cat-vals .no { color: #d63030; }
+.kx-measure-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.kx-measure-summary-title { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 14.5px; font-weight: 700; color: #0a1428; }
+.kx-measure-summary-sub { font-size: 12px; color: #64748b; margin-top: 3px; }
+.kx-measure-summary-pct { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 32px; font-weight: 800; letter-spacing: -.5px; }
+.kx-measure-summary-cats { border-top: 1px solid #f1f4f9; margin-top: 14px; padding-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+.kx-measure-summary-cat-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; padding: 5px 0; }
+.kx-measure-summary-cat-label { color: #334155; }
+.kx-measure-summary-cat-vals { color: #94a3b8; font-variant-numeric: tabular-nums; }
+.kx-measure-summary-cat-vals .ok { color: #059669; }
+.kx-measure-summary-cat-vals .no { color: #dc2626; }
 
-.kx-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #3a3f5c; margin-bottom: 14px; cursor: pointer; }
-.kx-obs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.kx-obs-card { display: flex; flex-direction: column; gap: 10px; }
-.kx-obs-card-head { display: flex; align-items: center; justify-content: space-between; }
-.kx-obs-index { font-size: 10.5px; font-weight: 700; color: #9aa2c0; letter-spacing: 0.5px; text-transform: uppercase; }
-.kx-obs-tags { display: flex; gap: 6px; }
-.kx-tag { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 20px; }
-.kx-field { display: flex; flex-direction: column; gap: 4px; }
+/* Lomakkeet */
+.kx-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #334155; margin-bottom: 16px; cursor: pointer; }
+.kx-obs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.kx-obs-card { display: flex; flex-direction: column; gap: 12px; }
+.kx-obs-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.kx-obs-index { font-size: 11.5px; font-weight: 600; color: #94a3b8; letter-spacing: .3px; }
+.kx-obs-tags { display: flex; gap: 6px; flex-shrink: 0; }
+.kx-tag { font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 20px; white-space: nowrap; }
+.kx-field { display: flex; flex-direction: column; gap: 5px; }
 .kx-field-row { display: flex; gap: 10px; }
 .kx-field-row .kx-field { flex: 1; }
-.kx-label { font-size: 10.5px; font-weight: 700; color: #6a7086; letter-spacing: 0.5px; text-transform: uppercase; }
+.kx-label { font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: .5px; text-transform: uppercase; }
 .kx-label-flat { margin-bottom: 0; }
-.kx-input { background: #fff; border: 1px solid #d3d6e0; border-radius: 8px; color: #14183a; font-size: 13.5px; padding: 8px 10px; width: 100%; outline: none; font-family: inherit; }
-.kx-input:focus { border-color: #223a8c; }
-.kx-input:disabled { background: #f4f5f8; color: #9aa2c0; }
-.kx-input-sm { padding: 6px 8px; font-size: 13px; }
-.kx-textarea { resize: vertical; min-height: 52px; line-height: 1.5; }
-.kx-btn-choice-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.kx-choice-btn { padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid #d3d6e0; background: #f4f5f8; color: #6a7086; cursor: pointer; }
-.kx-obs-meta { font-size: 11px; color: #9aa2c0; }
-.kx-obs-card-foot { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #eef0f5; padding-top: 10px; margin-top: 2px; }
+.kx-input { background: #fff; border: 1px solid #dbe1ea; border-radius: 10px; color: #0f172a; font-size: 14px; padding: 9px 12px; width: 100%; outline: none; font-family: inherit; transition: border-color .15s, box-shadow .15s; }
+.kx-input:focus { border-color: #0878E8; box-shadow: 0 0 0 3px rgba(8,120,232,.14); }
+.kx-input:disabled { background: #f8fafc; color: #94a3b8; }
+.kx-input-sm { padding: 7px 10px; font-size: 13px; border-radius: 8px; }
+.kx-textarea { resize: vertical; min-height: 56px; line-height: 1.5; }
+.kx-btn-choice-row { display: inline-flex; gap: 2px; flex-wrap: wrap; background: #f1f4f9; padding: 3px; border-radius: 10px; align-self: flex-start; }
+.kx-choice-btn { padding: 7px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 600; border: none; background: transparent; color: #64748b; cursor: pointer; transition: all .15s; }
+.kx-choice-btn:hover:not(.active) { color: #0f172a; }
+.kx-choice-btn.active { background: #fff; font-weight: 700; box-shadow: 0 1px 3px rgba(15,23,42,.12); }
+.kx-obs-meta { font-size: 11.5px; color: #94a3b8; }
+.kx-obs-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid #f1f4f9; padding-top: 12px; margin-top: 2px; flex-wrap: wrap; }
 
-.kx-measure-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+/* Mittaukset */
+.kx-measure-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .kx-measure-list { display: flex; flex-direction: column; gap: 10px; }
+.kx-measure-row { padding: 14px 18px; }
 .kx-measure-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.kx-measure-row-date { font-size: 13.5px; font-weight: 700; color: #14183a; }
-.kx-measure-row-sub { font-size: 11.5px; color: #6a7086; margin-top: 2px; }
+.kx-measure-row-date { font-size: 14px; font-weight: 700; color: #0f172a; }
+.kx-measure-row-sub { font-size: 12px; color: #64748b; margin-top: 2px; }
 .kx-measure-row-actions { display: flex; align-items: center; gap: 8px; }
-.kx-measure-pct { font-size: 18px; font-weight: 800; margin-right: 4px; }
-.kx-measure-edit { margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef0f5; display: flex; flex-direction: column; gap: 10px; }
-.kx-measure-cat { background: #f9fafc; border: 1px solid #eef0f5; border-radius: 10px; padding: 10px; }
+.kx-measure-pct { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 20px; font-weight: 800; margin-right: 4px; }
+.kx-measure-edit { margin-top: 14px; padding-top: 14px; border-top: 1px solid #f1f4f9; display: flex; flex-direction: column; gap: 10px; }
+.kx-measure-cat { background: #f8fafc; border: 1px solid #eef1f6; border-radius: 12px; padding: 12px; }
 .kx-measure-cat-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
-.kx-measure-cat-label { font-size: 13px; font-weight: 700; color: #14183a; }
-.kx-measure-cat-pct { font-size: 12px; font-weight: 700; }
+.kx-measure-cat-label { font-size: 13.5px; font-weight: 700; color: #0f172a; }
+.kx-measure-cat-pct { font-size: 12.5px; font-weight: 700; }
 .kx-count-row { display: flex; gap: 8px; }
-.kx-count-btn { flex: 1; padding: 9px 4px; border-radius: 8px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
-.kx-count-btn.ok { border: 1px solid #1a8a50; background: rgba(26,138,80,0.1); color: #1a8a50; }
-.kx-count-btn.no { border: 1px solid #d63030; background: rgba(214,48,48,0.1); color: #d63030; }
-.kx-count-btn.undo { flex: 0 0 auto; padding: 9px 12px; border: 1px solid #d3d6e0; background: #eef0f5; color: #6a7086; }
-.kx-legal-note { font-size: 11px; color: #9aa2c0; line-height: 1.5; padding: 12px 2px 4px; }
-.kx-note-toggle { margin-top: 10px; background: none; border: none; padding: 4px 0; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; }
-.kx-note-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding-top: 10px; border-top: 1px solid #eef0f5; }
-.kx-note-item { background: #fff; border: 1px solid #eef0f5; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.kx-count-btn { flex: 1; padding: 10px 4px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.kx-count-btn.ok { border: 1px solid #a7e3cb; background: #ecfdf5; color: #059669; }
+.kx-count-btn.no { border: 1px solid #fecaca; background: #fef2f2; color: #dc2626; }
+.kx-count-btn.undo { flex: 0 0 auto; padding: 10px 12px; border: 1px solid #dbe1ea; background: #fff; color: #64748b; }
+.kx-legal-note { font-size: 11.5px; color: #94a3b8; line-height: 1.55; padding: 14px 2px 4px; }
+.kx-note-toggle { margin-top: 10px; background: none; border: none; padding: 4px 0; font-size: 12.5px; font-weight: 700; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.kx-note-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid #f1f4f9; }
+.kx-note-item { background: #fff; border: 1px solid #eef1f6; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .kx-note-row { display: flex; align-items: center; gap: 8px; }
-.kx-note-field { background: #fff; border: 1px solid #d3d6e0; border-radius: 8px; color: #14183a; font-size: 13px; padding: 8px 10px; width: 100%; outline: none; resize: none; }
-.kx-note-checklabel { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #14183a; }
-.kx-note-del { background: none; border: none; color: #6a7086; font-size: 15px; }
-.kx-note-add { padding: 9px 4px; border: 1.5px dashed #b3b8c8; border-radius: 8px; background: none; color: #6a7086; font-size: 12.5px; }
-.kx-empty-note { text-align: center; padding: 20px; color: #6a7086; font-size: 13px; background: #f9fafc; border-radius: 10px; }
+.kx-note-field { background: #fff; border: 1px solid #dbe1ea; border-radius: 8px; color: #0f172a; font-size: 13px; padding: 8px 10px; width: 100%; outline: none; resize: none; font-family: inherit; }
+.kx-note-checklabel { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #0f172a; }
+.kx-note-del { background: none; border: none; color: #64748b; font-size: 15px; cursor: pointer; }
+.kx-note-add { padding: 9px 4px; border: 1.5px dashed #cbd3df; border-radius: 10px; background: none; color: #64748b; font-size: 12.5px; cursor: pointer; }
+.kx-empty-note { text-align: center; padding: 28px 20px; color: #64748b; font-size: 13.5px; background: #fff; border: 1px dashed #dbe1ea; border-radius: 14px; }
 
-.kx-toast { position: fixed; bottom: 20px; right: 20px; background: #14183a; color: #fff; font-size: 13px; font-weight: 600; padding: 10px 16px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.2); z-index: 50; }
+.kx-toast { position: fixed; bottom: 24px; right: 24px; background: #0a1428; color: #fff; font-size: 13.5px; font-weight: 600; padding: 12px 18px; border-radius: 12px; box-shadow: 0 10px 30px rgba(10,20,40,.3); z-index: 50; }
 
-.kx-pdf-overlay { position: fixed; inset: 0; background: #f4f5f8; z-index: 100; display: flex; flex-direction: column; }
-.kx-pdf-overlay-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: #17275c; }
-.kx-pdf-close { background: rgba(255,255,255,0.2); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; font-size: 18px; cursor: pointer; }
+.kx-pdf-overlay { position: fixed; inset: 0; background: rgba(10,20,40,.55); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.kx-pdf-overlay > * { width: 100%; max-width: 440px; }
+.kx-pdf-overlay-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: #0a1428; border-radius: 16px 16px 0 0; }
+.kx-pdf-close { background: rgba(255,255,255,.12); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; font-size: 16px; cursor: pointer; }
 .kx-pdf-title { font-size: 15px; font-weight: 700; color: #fff; }
-.kx-pdf-share { background: #c7cbd6; border: none; color: #17275c; font-size: 13px; font-weight: 700; padding: 8px 16px; border-radius: 8px; cursor: pointer; }
-.kx-pdf-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 32px; }
-.kx-pdf-icon { font-size: 64px; }
-.kx-pdf-text { font-size: 14px; color: #6a7086; text-align: center; line-height: 1.6; max-width: 360px; }
-.kx-pdf-text.success { color: #1a8a50; font-weight: 600; }
-.kx-pdf-text.success span { color: #6a7086; font-weight: 400; }
+.kx-pdf-share { background: #0878E8; border: none; color: #fff; font-size: 13px; font-weight: 700; padding: 8px 16px; border-radius: 9px; cursor: pointer; }
+.kx-pdf-body { background: #fff; border-radius: 0 0 16px 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 36px 28px; }
+.kx-pdf-icon { font-size: 56px; }
+.kx-pdf-text { font-size: 14px; color: #64748b; text-align: center; line-height: 1.6; }
+.kx-pdf-text.success { color: #059669; font-weight: 600; }
+.kx-pdf-text.success span { color: #64748b; font-weight: 400; }
 
-
-.kx-viewswitch { display: flex; background: rgba(255,255,255,0.1); border-radius: 9px; padding: 3px; gap: 2px; }
-.kx-viewswitch button { background: none; border: none; color: rgba(255,255,255,0.75); font-size: 13px; font-weight: 700; padding: 7px 12px; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.kx-viewswitch button.active { background: #fff; color: #17275c; }
-.kx-count-pill { background: #f5a800; color: #14183a; border-radius: 10px; font-size: 11px; padding: 1px 7px; }
-.kx-shell-single { display: block; }
-.kx-site-name { display: flex; flex-direction: column; gap: 1px; }
-.kx-site-client { font-size: 11px; font-weight: 500; color: #9aa2c0; }
-.kx-client-select { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: #6a7086; flex-wrap: wrap; }
-.kx-client-select select { width: auto; max-width: 280px; }
-.kx-kpis { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
-.kx-kpi { background: #f9fafc; border: 1px solid #eef0f5; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 2px; text-align: left; font-family: inherit; }
-button.kx-kpi { cursor: pointer; } button.kx-kpi:hover { border-color: #b3b8c8; }
-.kx-kpi-num { font-size: 26px; font-weight: 800; line-height: 1.1; }
-.kx-kpi-label { font-size: 11.5px; color: #6a7086; font-weight: 600; }
-.kx-trend { grid-column: 1 / -1; }
-.kx-trend-svg { width: 100%; height: auto; max-height: 260px; display: block; margin-top: 8px; }
-.kx-tag { white-space: nowrap; }
-.kx-obs-card-head { gap: 8px; align-items: flex-start; }
-.kx-trend-legend { display: flex; gap: 12px; font-size: 11.5px; color: #6a7086; flex-wrap: wrap; }
-.kx-trend-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.kx-trend-svg { width: 100%; height: auto; display: block; margin-top: 10px; overflow: visible; }
+.kx-trend-legend { display: flex; gap: 14px; font-size: 12px; color: #64748b; flex-wrap: wrap; }
+.kx-trend-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .kx-plain-btn { width: 100%; background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; }
 .kx-recent-obs-row .kx-tag { flex-shrink: 0; }
-@media (max-width: 820px) {
-  .kx-topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+
+@media (max-width: 860px) {
+  .kx-topbar { flex-wrap: wrap; gap: 10px; padding: 10px 14px; position: static; }
   .kx-topbar-actions { flex-wrap: wrap; width: 100%; justify-content: space-between; }
   .kx-viewswitch { flex: 1; overflow-x: auto; }
-  .kx-viewswitch button { padding: 7px 9px; font-size: 12px; }
-  .kx-hide-mobile { display: none; }
-  .kx-main-head-actions { width: 100%; }
-  .kx-main-head-actions > * { flex: 1; justify-content: center; }
-}
-@media (max-width: 820px) {
-  .kx-topbar { position: static; }
-}
-@media (max-width: 820px) {
-  .kx-shell { flex-direction: column; padding: 14px; gap: 14px; }
+  .kx-viewswitch button { padding: 7px 10px; font-size: 12.5px; }
+  .kx-hide-mobile, .kx-user-chip { display: none; }
+  .kx-shell { flex-direction: column; align-items: stretch; padding: 14px; gap: 14px; }
+  .kx-main { width: 100%; }
+  .kx-brand-sub { display: none; }
   .kx-sidebar { flex: none; width: 100%; position: static; }
   .kx-site-list { max-height: none; }
+  .kx-site-actions { opacity: 1; }
+  .kx-site-row.active::before { display: none; }
   .kx-obs-grid { grid-template-columns: 1fr; }
+  .kx-main-title { font-size: 22px; }
+  .kx-main-head-actions { width: 100%; }
+  .kx-main-head-actions > * { flex: 1; justify-content: center; }
+  .kx-tabs { gap: 18px; }
 }
 `

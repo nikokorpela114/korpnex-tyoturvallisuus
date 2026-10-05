@@ -82,7 +82,7 @@ export default function AuthGate({ children }) {
 
   // --- Lataus ---
   if (session === undefined || (session && profile === undefined)) {
-    return <Shell><div style={{ textAlign: 'center', color: '#6a7086', fontSize: 14 }}>Ladataan…</div></Shell>
+    return <Shell><div style={{ textAlign: 'center', color: '#64748b', fontSize: 14 }}>Ladataan…</div></Shell>
   }
 
   // --- Salasanan asetus (kutsu- tai palautuslinkistä) ---
@@ -142,9 +142,9 @@ export default function AuthGate({ children }) {
           <button type="button" style={linkBtn} onClick={() => { setMode('forgot'); setErr(''); setMsg('') }}>Unohditko salasanan?</button>
         </form>
       )}
-      <p style={{ ...pStyle, fontSize: 12, marginTop: 22, textAlign: 'center' }}>
+      <p style={{ ...pStyle, fontSize: 12, marginTop: 22, textAlign: 'center', color: 'rgba(255,255,255,.55)' }}>
         Portaali on Korpnexin työturvallisuuspalveluiden asiakkaille.<br />
-        Tunnukset saat Korpnexilta · <a href="https://korpnex.fi" style={{ color: '#223a8c' }}>korpnex.fi</a>
+        Tunnukset saat Korpnexilta · <a href="https://korpnex.fi" style={{ color: '#7cc8ff' }}>korpnex.fi</a>
       </p>
     </Shell>
   )
@@ -152,25 +152,27 @@ export default function AuthGate({ children }) {
 
 function Shell({ children }) {
   return (
-    <div style={{ minHeight: '100%', background: '#eef0f5', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 'max(env(safe-area-inset-top), 12px) 16px 12px', background: '#17275c' }}>
-        <img src="/korpnex-icon.png" alt="Korpnex" style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'cover' }} />
-        <span style={{ fontSize: 17, fontWeight: 800, color: '#fff', letterSpacing: 0.5 }}>KORPNEX</span>
-        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', fontWeight: 500 }}>· Työturvallisuus</span>
-      </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '32px 16px', maxWidth: 400, width: '100%', margin: '0 auto' }}>
+    <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', background: 'radial-gradient(ellipse at 80% 0%, rgba(8,120,232,.35), transparent 55%), radial-gradient(ellipse at 0% 100%, rgba(32,184,255,.12), transparent 50%), linear-gradient(170deg, #0b1730, #050a14 75%)' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 'max(env(safe-area-inset-top), 28px) 16px 28px', maxWidth: 420, width: '100%', margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22, justifyContent: 'center' }}>
+          <img src="/korpnex-icon.png" alt="Korpnex" style={{ width: 44, height: 44, borderRadius: 11, objectFit: 'cover' }} />
+          <div>
+            <div style={{ fontFamily: 'Jakarta, Inter, sans-serif', fontSize: 20, fontWeight: 800, color: '#fff', letterSpacing: 4 }}>KORPNEX</div>
+            <div style={{ fontSize: 12, color: '#7cc8ff', fontWeight: 600, letterSpacing: 1.2, textTransform: 'uppercase' }}>Työturvallisuus</div>
+          </div>
+        </div>
         {children}
       </div>
     </div>
   )
 }
 
-const formStyle = { background: '#fff', border: '1px solid #d3d6e0', borderRadius: 14, padding: 22, display: 'flex', flexDirection: 'column', gap: 10 }
-const h1 = { fontSize: 21, fontWeight: 800, color: '#17275c', margin: 0 }
-const pStyle = { fontSize: 13.5, color: '#6a7086', lineHeight: 1.55, margin: '0 0 6px' }
-const input = { background: '#fff', border: '1px solid #d3d6e0', borderRadius: 8, color: '#14183a', fontSize: 15, padding: '11px 12px', width: '100%', outline: 'none', boxSizing: 'border-box' }
-const primary = { marginTop: 4, padding: 13, background: '#17275c', border: 'none', borderRadius: 8, color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }
-const secondary = { padding: 12, background: '#eef0f5', border: '1px solid #d3d6e0', borderRadius: 8, color: '#17275c', fontSize: 14, fontWeight: 700, cursor: 'pointer' }
-const linkBtn = { background: 'none', border: 'none', color: '#223a8c', fontSize: 13, padding: 6, cursor: 'pointer' }
-const errStyle = { background: 'rgba(214,48,48,0.08)', color: '#d63030', border: '1px solid rgba(214,48,48,0.3)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }
-const okStyle = { background: 'rgba(26,138,80,0.08)', color: '#1a8a50', border: '1px solid rgba(26,138,80,0.3)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }
+const formStyle = { background: '#fff', borderRadius: 18, padding: 26, boxShadow: '0 30px 80px rgba(0,0,0,.45)', display: 'flex', flexDirection: 'column', gap: 10 }
+const h1 = { fontFamily: 'Jakarta, Inter, sans-serif', fontSize: 23, fontWeight: 800, color: '#0a1428', margin: 0, letterSpacing: -0.3 }
+const pStyle = { fontSize: 13.5, color: '#64748b', lineHeight: 1.55, margin: '0 0 6px' }
+const input = { background: '#fff', border: '1px solid #e3e8ef', borderRadius: 8, color: '#0f172a', fontSize: 15, padding: '11px 12px', width: '100%', outline: 'none', boxSizing: 'border-box' }
+const primary = { marginTop: 6, padding: 13, background: '#0878E8', boxShadow: '0 8px 20px rgba(8,120,232,.35)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }
+const secondary = { padding: 12, background: '#f1f4f9', border: '1px solid #e3e8ef', borderRadius: 8, color: '#0a1428', fontSize: 14, fontWeight: 700, cursor: 'pointer' }
+const linkBtn = { background: 'none', border: 'none', color: '#0878E8', fontSize: 13, padding: 6, cursor: 'pointer' }
+const errStyle = { background: 'rgba(220,38,38,0.08)', color: '#dc2626', border: '1px solid rgba(220,38,38,0.3)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }
+const okStyle = { background: 'rgba(5,150,105,0.08)', color: '#059669', border: '1px solid rgba(5,150,105,0.3)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }

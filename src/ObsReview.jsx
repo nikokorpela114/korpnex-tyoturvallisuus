@@ -9,14 +9,14 @@ import { sb } from './supabaseClient.js'
 import { compressImage } from './shared.js'
 import { uploadPhoto } from './photos.js'
 
-const sevColor = { Kriittinen: '#d63030', Huomio: '#d07800', Info: '#1a8a50' }
+const sevColor = { Kriittinen: '#dc2626', Huomio: '#d97706', Info: '#059669' }
 const fmt = d => d ? new Date(d).toLocaleDateString('fi-FI') : ''
 const fmtDt = d => d ? new Date(d).toLocaleString('fi-FI', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
 
 export const STATUS = {
-  avoin: { label: 'Avoin', color: '#d63030', bg: 'rgba(214,48,48,0.1)' },
+  avoin: { label: 'Avoin', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' },
   kuitattu: { label: 'Odottaa tarkastusta', color: '#a65b00', bg: 'rgba(245,168,0,0.16)' },
-  korjattu: { label: '✓ Korjattu', color: '#1a8a50', bg: 'rgba(26,138,80,0.1)' },
+  korjattu: { label: '✓ Korjattu', color: '#059669', bg: 'rgba(5,150,105,0.1)' },
 }
 
 export function StatusTag({ status }) {
@@ -44,7 +44,7 @@ export function ObsCard({ o, urls, showSite, onOpenPhoto, children }) {
     <div className="kx-card kx-obs-card" style={o.status === 'kuitattu' ? { borderColor: '#f0c36d' } : undefined}>
       <div className="kx-obs-card-head">
         <span className="kx-obs-index">
-          {showSite ? <b style={{ color: '#17275c' }}>{o.site}</b> : 'Havainto'} · {fmt(o.created_at)}
+          {showSite ? <b style={{ color: '#0a1428' }}>{o.site}</b> : 'Havainto'} · {fmt(o.created_at)}
         </span>
         <div className="kx-obs-tags">
           <span className="kx-tag" style={{ background: 'rgba(0,0,0,0.04)', color: sevColor[o.sev] }}>{o.sev}</span>
@@ -53,9 +53,9 @@ export function ObsCard({ o, urls, showSite, onOpenPhoto, children }) {
       </div>
       <div className="kx-obs-title">{o.havainto || '(ei kuvausta)'}</div>
       <div className="kx-obs-meta-row">
-        {o.yritys && <span>🏢 {o.yritys}</span>}
-        {o.due_date && <span style={overdue(o) ? { color: '#d63030', fontWeight: 700 } : undefined}>⏱ Korjattava {fmt(o.due_date)}{overdue(o) ? ' — myöhässä' : ''}</span>}
-        {o.inspector && <span>👷 {o.inspector}</span>}
+        {o.yritys && <span><b style={{ color: '#334155', fontWeight: 600 }}>{o.yritys}</b></span>}
+        {o.due_date && <span style={overdue(o) ? { color: '#dc2626', fontWeight: 700 } : undefined}>Korjattava {fmt(o.due_date)} mennessä{overdue(o) ? ' — myöhässä' : ''}</span>}
+        {o.inspector && <span>Tarkastaja: {o.inspector}</span>}
       </div>
       {o.note && <div className="kx-obs-note">{o.note}</div>}
 
@@ -68,10 +68,10 @@ export function ObsCard({ o, urls, showSite, onOpenPhoto, children }) {
       )}
 
       <div className="kx-timeline">
-        <div>🔴 Merkitty {fmtDt(o.created_at)}{o.inspector ? ` · ${o.inspector}` : ''}</div>
-        {o.reopen_comment && o.status === 'avoin' && <div style={{ color: '#d63030' }}>↩ Palautettu avoimeksi: {o.reopen_comment}</div>}
-        {o.ack_at && <div>🟡 Kuitattu korjatuksi {fmtDt(o.ack_at)} · {o.ack_by_name}{o.ack_comment ? ` — "${o.ack_comment}"` : ''}</div>}
-        {o.status === 'korjattu' && <div>🟢 Korjaus varmistettu {fmtDt(o.fixed_at)}{o.fixed_by_name ? ` · ${o.fixed_by_name}` : ''}</div>}
+        <div className="kx-tl-red">Merkitty {fmtDt(o.created_at)}{o.inspector ? ` · ${o.inspector}` : ''}</div>
+        {o.reopen_comment && o.status === 'avoin' && <div className="kx-tl-red" style={{ color: '#dc2626' }}>Palautettu avoimeksi: {o.reopen_comment}</div>}
+        {o.ack_at && <div className="kx-tl-amber">Kuitattu korjatuksi {fmtDt(o.ack_at)} · {o.ack_by_name}{o.ack_comment ? ` — "${o.ack_comment}"` : ''}</div>}
+        {o.status === 'korjattu' && <div className="kx-tl-green">Korjaus varmistettu {fmtDt(o.fixed_at)}{o.fixed_by_name ? ` · ${o.fixed_by_name}` : ''}</div>}
       </div>
       {children}
     </div>
@@ -177,24 +177,31 @@ export function Lightbox({ url, onClose }) {
 }
 
 export const OBS_REVIEW_CSS = `
-.kx-obs-title { font-size: 15px; font-weight: 800; color: #14183a; line-height: 1.35; }
-.kx-obs-meta-row { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: #6a7086; }
-.kx-obs-note { font-size: 13px; color: #3a3f5c; line-height: 1.5; background: #f9fafc; border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+.kx-obs-title { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 16.5px; font-weight: 700; color: #0a1428; line-height: 1.35; letter-spacing: -.1px; }
+.kx-obs-meta-row { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: #64748b; }
+.kx-obs-note { font-size: 13.5px; color: #334155; line-height: 1.55; background: #f8fafc; border: 1px solid #eef1f6; border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
 .kx-photo-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.kx-photo { position: relative; width: 96px; height: 96px; border-radius: 8px; overflow: hidden; border: none; padding: 0; background: #e2e5ee; cursor: zoom-in; flex-shrink: 0; }
+.kx-photo { position: relative; width: 108px; height: 108px; border-radius: 12px; overflow: hidden; border: 1px solid #e3e8ef; padding: 0; background: #eef1f6; cursor: zoom-in; flex-shrink: 0; transition: transform .15s, box-shadow .15s; }
+.kx-photo:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(15,23,42,.12); }
 .kx-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .kx-photo-ph { display: flex; align-items: center; justify-content: center; height: 100%; opacity: .4; }
-.kx-photo-label { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(23,39,92,.78); color: #fff; font-size: 10px; font-weight: 700; padding: 2px 0; text-align: center; }
-.kx-photo-x { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; }
-.kx-timeline { font-size: 12px; color: #3a3f5c; display: flex; flex-direction: column; gap: 3px; border-top: 1px solid #eef0f5; padding-top: 8px; line-height: 1.45; }
-.kx-btn-ack { width: 100%; justify-content: center; background: #1a8a50; }
-.kx-btn-ack:hover { background: #157443; }
-.kx-ack-form { display: flex; flex-direction: column; gap: 8px; background: #f4f8f5; border: 1px solid rgba(26,138,80,0.3); border-radius: 10px; padding: 10px; }
+.kx-photo-label { position: absolute; left: 6px; bottom: 6px; background: rgba(10,20,40,.78); backdrop-filter: blur(4px); color: #fff; font-size: 10.5px; font-weight: 700; padding: 3px 7px; border-radius: 6px; }
+.kx-photo-x { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; }
+.kx-timeline { list-style: none; font-size: 12.5px; color: #334155; display: flex; flex-direction: column; gap: 0; border-top: 1px solid #f1f4f9; padding-top: 12px; line-height: 1.45; }
+.kx-timeline > div { position: relative; padding: 0 0 10px 20px; }
+.kx-timeline > div:last-child { padding-bottom: 0; }
+.kx-timeline > div::before { content: ''; position: absolute; left: 4px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, #cbd3df); box-shadow: 0 0 0 3px #fff, 0 0 0 4px var(--dot, #cbd3df); }
+.kx-timeline > div:not(:last-child)::after { content: ''; position: absolute; left: 7.5px; top: 14px; bottom: 0; width: 1px; background: #e3e8ef; }
+.kx-tl-red { --dot: #dc2626; } .kx-tl-amber { --dot: #d97706; } .kx-tl-green { --dot: #059669; }
+.kx-btn-ack { width: 100%; justify-content: center; padding: 11px 16px; background: #059669 !important; border-color: #059669 !important; box-shadow: 0 1px 2px rgba(5,150,105,.3) !important; }
+.kx-btn-ack:hover { background: #047857 !important; }
+.kx-ack-form { display: flex; flex-direction: column; gap: 10px; background: #f0fdf7; border: 1px solid #a7e3cb; border-radius: 12px; padding: 12px; }
 .kx-ack-photo-row { display: flex; gap: 8px; align-items: center; }
-.kx-hint { font-size: 11.5px; color: #6a7086; }
-.kx-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out; }
-.kx-lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
-.kx-filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
-.kx-filter { padding: 7px 12px; border-radius: 20px; border: 1px solid #d3d6e0; background: #fff; font-size: 12.5px; font-weight: 700; color: #6a7086; cursor: pointer; }
-.kx-filter.active { background: #17275c; border-color: #17275c; color: #fff; }
+.kx-hint { font-size: 12px; color: #64748b; line-height: 1.5; }
+.kx-lightbox { position: fixed; inset: 0; background: rgba(5,10,20,.92); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; cursor: zoom-out; }
+.kx-lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.kx-filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.kx-filter { padding: 7px 14px; border-radius: 20px; border: 1px solid #dbe1ea; background: #fff; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; transition: all .15s; }
+.kx-filter:hover:not(.active) { border-color: #cbd3df; color: #0f172a; }
+.kx-filter.active { background: #0a1428; border-color: #0a1428; color: #fff; }
 `
