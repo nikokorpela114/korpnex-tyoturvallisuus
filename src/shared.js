@@ -130,13 +130,13 @@ export function contractorStats(obs, weeks = 12) {
   const map = new Map()
   for (const o of obs) {
     const name = (o.yritys || '').trim() || 'Ei merkitty'
-    if (!map.has(name)) map.set(name, { name, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, kuitattu: 0, korjattu: 0, myohassa: 0, fixDays: [], luokat: {}, weekly: new Array(weeks).fill(0), obs: [] })
+    if (!map.has(name)) map.set(name, { name, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, kuitattu: 0, korjattu: 0, tiedoksi: 0, myohassa: 0, fixDays: [], luokat: {}, weekly: new Array(weeks).fill(0), obs: [] })
     const r = map.get(name)
     r.total++; r.obs.push(o)
     if (r[o.sev] != null) r[o.sev]++
-    const st = o.status === 'korjattu' || o.status === 'kuitattu' ? o.status : 'avoin'
+    const st = ['korjattu', 'kuitattu', 'tiedoksi'].includes(o.status) ? o.status : 'avoin'
     r[st]++
-    if (o.due_date && st !== 'korjattu' && new Date(o.due_date + 'T23:59:59') < new Date()) r.myohassa++
+    if (o.due_date && (st === 'avoin' || st === 'kuitattu') && new Date(o.due_date + 'T23:59:59') < new Date()) r.myohassa++
     if (st === 'korjattu' && o.fixed_at && o.created_at) r.fixDays.push((new Date(o.fixed_at) - new Date(o.created_at)) / DAY)
     if (o.luokka) r.luokat[o.luokka] = (r.luokat[o.luokka] || 0) + 1
     const wi = weeks - 1 - Math.round((lastWeek - weekStart(o.created_at)) / (7 * DAY))
@@ -158,16 +158,16 @@ export const fmtDays = v => v == null ? '–' : v.toFixed(1).replace('.', ',')
 // niitä on, ja kuinka moni on vielä korjaamatta.
 export function summarizeObservations(obs) {
   const bySev = { Kriittinen: 0, Huomio: 0, Info: 0 }
-  const byStatus = { avoin: 0, kuitattu: 0, korjattu: 0 }
+  const byStatus = { avoin: 0, kuitattu: 0, korjattu: 0, tiedoksi: 0 }
   const yritysMap = new Map()
   for (const o of obs) {
     const sev = bySev[o.sev] != null ? o.sev : null
     if (sev) bySev[sev]++
-    const status = o.status === 'korjattu' || o.status === 'kuitattu' ? o.status : 'avoin'
+    const status = ['korjattu', 'kuitattu', 'tiedoksi'].includes(o.status) ? o.status : 'avoin'
     byStatus[status]++
     const yritys = (o.yritys || '').trim() || 'Ei merkitty'
     if (!yritysMap.has(yritys)) {
-      yritysMap.set(yritys, { yritys, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, kuitattu: 0, korjattu: 0 })
+      yritysMap.set(yritys, { yritys, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, kuitattu: 0, korjattu: 0, tiedoksi: 0 })
     }
     const row = yritysMap.get(yritys)
     row.total++
@@ -359,7 +359,9 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
       if (o.status) {
         ensureSpace(6)
         const fmt = d => d ? new Date(d).toLocaleDateString('fi-FI') : ''
-        const st = o.status === 'korjattu'
+        const st = o.status === 'tiedoksi'
+          ? 'Tiedoksi – ei vaadi korjausta'
+          : o.status === 'korjattu'
           ? `Korjattu ${fmt(o.fixed_at)}${o.fixed_by_name ? ' (' + o.fixed_by_name + ')' : ''}`
           : o.status === 'kuitattu'
             ? `Kuitattu korjatuksi ${fmt(o.ack_at)}${o.ack_by_name ? ' (' + o.ack_by_name + ')' : ''}, odottaa tarkastusta`

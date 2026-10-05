@@ -499,11 +499,13 @@ export default function Dashboard({ profile, logout }) {
   const openCount = activeObs.filter(o => o.status === 'avoin').length
   const ackCount = activeObs.filter(o => o.status === 'kuitattu').length
   const fixedCount = activeObs.filter(o => o.status === 'korjattu').length
+  const infoCount = activeObs.filter(o => o.status === 'tiedoksi').length
   const lateCount = activeObs.filter(overdue).length
   const filteredObs = activeObs.filter(o =>
     obsFilter === 'kaikki' ? true
       : obsFilter === 'avoimet' ? o.status === 'avoin'
       : obsFilter === 'odottaa' ? o.status === 'kuitattu'
+      : obsFilter === 'tiedoksi' ? o.status === 'tiedoksi'
       : o.status === 'korjattu')
   const photoPaths = (view === 'tarkastus' ? reviewList : obs).flatMap(o => [...(o.photos || []).map(p => p.path), o.ack_photo, o.fix_photo])
   const urls = usePhotoUrls(photoPaths)
@@ -774,7 +776,7 @@ export default function Dashboard({ profile, logout }) {
                 {tab === 'havainnot' && !isC && (
                   <div>
                     <div className="kx-filter-row">
-                      {[['avoimet', `Avoimet (${openCount})`], ['odottaa', `Odottaa tarkastusta (${ackCount})`], ['korjatut', `Korjatut (${fixedCount})`], ['kaikki', `Kaikki (${activeObs.length})`]].map(([k, l]) => (
+                      {[['avoimet', `Avoimet (${openCount})`], ['odottaa', `Odottaa tarkastusta (${ackCount})`], ['korjatut', `Korjatut (${fixedCount})`], ...(infoCount ? [['tiedoksi', `Tiedoksi (${infoCount})`]] : []), ['kaikki', `Kaikki (${activeObs.length})`]].map(([k, l]) => (
                         <button key={k} className={`kx-filter ${obsFilter === k ? 'active' : ''}`} onClick={() => setObsFilter(k)}>{l}</button>
                       ))}
                     </div>
@@ -1146,7 +1148,7 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
   return (
     <div className="kx-obs-panel">
       <div className="kx-filter-row" style={{ alignItems: 'center' }}>
-        {[['kaikki', `Kaikki (${base.length})`], ['avoin', `Avoimet (${cnt('avoin')})`], ['kuitattu', `Odottaa tarkastusta (${cnt('kuitattu')})`], ['korjattu', `Korjatut (${cnt('korjattu')})`]].map(([k, l]) => (
+        {[['kaikki', `Kaikki (${base.length})`], ['avoin', `Avoimet (${cnt('avoin')})`], ['kuitattu', `Odottaa tarkastusta (${cnt('kuitattu')})`], ['korjattu', `Korjatut (${cnt('korjattu')})`], ['tiedoksi', `Tiedoksi (${cnt('tiedoksi')})`]].map(([k, l]) => (
           <button key={k} className={`kx-filter ${filter === k ? 'active' : ''}`} onClick={() => setFilter(k)}>{l}</button>
         ))}
         <label className="kx-checkbox-row" style={{ margin: '0 0 0 auto' }}>
@@ -1225,8 +1227,8 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
             <div className="kx-field">
               <div className="kx-label">Tila</div>
               <div className="kx-btn-choice-row">
-                {['avoin', ...(o.status === 'kuitattu' ? ['kuitattu'] : []), 'korjattu'].map(s => (
-                  <button key={s} className={`kx-choice-btn ${o.status === s ? 'active' : ''}`} style={o.status === s ? { color: s === 'korjattu' ? '#059669' : s === 'kuitattu' ? '#b45309' : '#dc2626' } : undefined} onClick={() => onChange(o.id, 'status', s)}>{s === 'korjattu' ? '✓ Korjattu' : s === 'kuitattu' ? 'Kuitattu (asiakas)' : 'Avoin'}</button>
+                {['avoin', ...(o.status === 'kuitattu' ? ['kuitattu'] : []), 'korjattu', 'tiedoksi'].map(s => (
+                  <button key={s} className={`kx-choice-btn ${o.status === s ? 'active' : ''}`} style={o.status === s ? { color: s === 'korjattu' ? '#059669' : s === 'kuitattu' ? '#b45309' : s === 'tiedoksi' ? '#475569' : '#dc2626' } : undefined} onClick={() => onChange(o.id, 'status', s)}>{s === 'korjattu' ? '✓ Korjattu' : s === 'kuitattu' ? 'Kuitattu (asiakas)' : s === 'tiedoksi' ? 'Tiedoksi' : 'Avoin'}</button>
                 ))}
               </div>
             </div>

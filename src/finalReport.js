@@ -10,7 +10,7 @@ import {
 const NAVY = [10, 20, 40], BLUE = [8, 120, 232], INK = [15, 23, 42], MUTED = [100, 116, 139], LINE = [227, 232, 239]
 const RED = [220, 38, 38], AMBER = [217, 119, 6], GREEN = [5, 150, 105]
 const fmt = d => d ? new Date(d).toLocaleDateString('fi-FI') : ''
-const statusFi = s => s === 'korjattu' ? 'Korjattu' : s === 'kuitattu' ? 'Kuitattu' : 'Avoin'
+const statusFi = s => s === 'korjattu' ? 'Korjattu' : s === 'kuitattu' ? 'Kuitattu' : s === 'tiedoksi' ? 'Tiedoksi' : 'Avoin'
 
 export async function buildFinalReportPDF({ site, clientName, obs, trRows, mvrRows, photoLoader, onProgress }) {
   const { jsPDF } = await import('jspdf')
@@ -28,7 +28,8 @@ export async function buildFinalReportPDF({ site, clientName, obs, trRows, mvrRo
     ...[...trRows, ...mvrRows].map(r => r.report_id || new Date(r.created_at).toDateString()),
   ]).size
   const fixed = sorted.filter(o => o.status === 'korjattu')
-  const openList = sorted.filter(o => o.status !== 'korjattu')
+  const openList = sorted.filter(o => o.status === 'avoin' || o.status === 'kuitattu')
+  const needFix = sorted.filter(o => o.status !== 'tiedoksi')
   const fixDays = fixed.filter(o => o.fixed_at).map(o => (new Date(o.fixed_at) - new Date(o.created_at)) / 864e5)
   const avgFix = fixDays.length ? fixDays.reduce((a, b) => a + b, 0) / fixDays.length : null
   const crit = sorted.filter(o => o.sev === 'Kriittinen').length
@@ -80,7 +81,7 @@ export async function buildFinalReportPDF({ site, clientName, obs, trRows, mvrRo
   const kpis = [
     ['Havainnot', String(sorted.length), INK],
     ['Kriittiset', String(crit), crit ? RED : INK],
-    ['Korjattu', sorted.length ? `${Math.round(fixed.length / sorted.length * 100)} %` : '–', GREEN],
+    ['Korjattu', needFix.length ? `${Math.round(fixed.length / needFix.length * 100)} %` : '–', GREEN],
     ['Korjausaika ka.', avgFix == null ? '–' : `${fmtDays(avgFix)} pv`, INK],
     ['Avoinna', String(openList.length), openList.length ? AMBER : GREEN],
   ]
@@ -212,7 +213,7 @@ export async function buildFinalReportPDF({ site, clientName, obs, trRows, mvrRo
     doc.text(h, M + 20, y + 4.4)
     doc.text(yr, M + 98, y + 4.4)
     doc.setTextColor(...(o.sev === 'Kriittinen' ? RED : o.sev === 'Huomio' ? AMBER : GREEN)); doc.text(o.sev || '', M + 136, y + 4.4)
-    doc.setTextColor(...(o.status === 'korjattu' ? GREEN : o.status === 'kuitattu' ? AMBER : RED))
+    doc.setTextColor(...(o.status === 'korjattu' ? GREEN : o.status === 'kuitattu' ? AMBER : o.status === 'tiedoksi' ? MUTED : RED))
     doc.text(statusFi(o.status) + (o.status === 'korjattu' && o.fixed_at ? ` ${fmt(o.fixed_at)}` : ''), M + 156, y + 4.4)
     y += rowH
   }

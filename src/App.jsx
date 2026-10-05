@@ -245,7 +245,10 @@ export default function App({ profile, logout }) {
       const yritys = canonicalYritys(o.yritys)
       const data = {
         havainto: o.havainto, yritys, sev: o.sev, note: o.note, luokka: o.luokka || null,
-        due_date: o.due_date || null,
+        // Tila lähetetään vain uudelle havainnolle tai kun tiedoksi-valintaa
+        // on muutettu — muuten asiakkaan kuittaus ei jää tämän alle.
+        ...((!o.db_id || o._statusTouched) ? { status: o.tiedoksi ? 'tiedoksi' : 'avoin' } : {}),
+        due_date: o.tiedoksi ? null : (o.due_date || null),
         photos: photos.filter(p => p.path).map(p => ({ path: p.path })),
         site: currentSite, inspector: currentInspector,
         local_id: o.id, report_id: reportIdRef.current,
@@ -253,6 +256,7 @@ export default function App({ profile, logout }) {
       if (o.db_id) {
         const { error } = await sb.from('safety_observations').update(data).eq('id', o.db_id)
         if (error) throw error
+        if (o._statusTouched) setObs(prev => prev.map(x => x.id === o.id ? { ...x, _statusTouched: false } : x))
         showSync('✓ Tallennettu')
         return o.db_id
       }
@@ -675,6 +679,7 @@ export default function App({ profile, logout }) {
                     {!o.db_id && <span title="Ei vielä synkronoitu pilveen — tallessa paikallisesti" style={{ marginLeft: 6, color: '#d97706' }}>●</span>}
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {o.tiedoksi && <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: '#eef1f6', color: '#475569' }}>Tiedoksi</span>}
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: sevBg[o.sev], color: sevColor[o.sev] }}>{o.sev}</span>
                     <button onClick={() => removeObs(o.id)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 18 }}>🗑</button>
                   </div>
@@ -721,6 +726,20 @@ export default function App({ profile, logout }) {
                     </div>
                   </div>
                   <div>
+                    <div style={labelStyle}>Vaatiiko korjausta?</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {[[false, '🔧 Korjattava'], [true, 'ℹ️ Tiedoksi, ei korjausta']].map(([v, l]) => (
+                        <button key={String(v)} onClick={() => { updateObs(o.id, 'tiedoksi', v); updateObs(o.id, '_statusTouched', true) }} style={{
+                          flex: 1, padding: '8px 4px', borderRadius: 10, fontSize: 12, fontWeight: 700,
+                          border: `1px solid ${!!o.tiedoksi === v ? (v ? '#475569' : '#0878E8') : '#e3e8ef'}`,
+                          background: !!o.tiedoksi === v ? (v ? '#eef1f6' : '#eaf3fe') : '#fff',
+                          color: !!o.tiedoksi === v ? (v ? '#334155' : '#0a5bb5') : '#64748b',
+                        }}>{l}</button>
+                      ))}
+                    </div>
+                    {o.tiedoksi && <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 5, lineHeight: 1.45 }}>Näkyy asiakkaalle tiedoksi, mutta ei avoimena puutteena eikä vaadi kuittausta. Esim. suojainten käyttö, josta keskustellaan työmaan kanssa.</div>}
+                  </div>
+                  <div>
                     <div style={labelStyle}>Luokka</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {OBS_CATEGORIES.map(c => (
@@ -733,10 +752,10 @@ export default function App({ profile, logout }) {
                       ))}
                     </div>
                   </div>
-                  <div>
+                  {!o.tiedoksi && <div>
                     <div style={labelStyle}>Korjattava viimeistään <span style={{ textTransform: 'none', fontWeight: 500 }}>(valinnainen)</span></div>
                     <input type="date" style={inputStyle} value={o.due_date || ''} onChange={e => updateObs(o.id, 'due_date', e.target.value)} />
-                  </div>
+                  </div>}
                   <div>
                     <div style={labelStyle}>Lisätieto</div>
                     <textarea style={{ ...selectStyle, resize: 'none', minHeight: 56, lineHeight: 1.5 }}

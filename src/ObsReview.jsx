@@ -17,6 +17,7 @@ export const STATUS = {
   avoin: { label: 'Avoin', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' },
   kuitattu: { label: 'Odottaa tarkastusta', color: '#a65b00', bg: 'rgba(245,168,0,0.16)' },
   korjattu: { label: '✓ Korjattu', color: '#059669', bg: 'rgba(5,150,105,0.1)' },
+  tiedoksi: { label: 'Tiedoksi', color: '#475569', bg: '#eef1f6' },
 }
 
 export function StatusTag({ status }) {
@@ -25,7 +26,7 @@ export function StatusTag({ status }) {
 }
 
 export function overdue(o) {
-  if (!o.due_date || o.status === 'korjattu') return false
+  if (!o.due_date || o.status === 'korjattu' || o.status === 'tiedoksi') return false
   return new Date(o.due_date + 'T23:59:59') < new Date()
 }
 
@@ -69,9 +70,10 @@ export function ObsCard({ o, urls, showSite, onOpenPhoto, children }) {
       )}
 
       <div className="kx-timeline">
-        <div className="kx-tl-red">Merkitty {fmtDt(o.created_at)}{o.inspector ? ` · ${o.inspector}` : ''}</div>
+        <div className={o.status === 'tiedoksi' ? '' : 'kx-tl-red'}>Merkitty {fmtDt(o.created_at)}{o.inspector ? ` · ${o.inspector}` : ''}</div>
         {o.reopen_comment && o.status === 'avoin' && <div className="kx-tl-red" style={{ color: '#dc2626' }}>Palautettu avoimeksi: {o.reopen_comment}</div>}
         {o.ack_at && <div className="kx-tl-amber">Kuitattu korjatuksi {fmtDt(o.ack_at)} · {o.ack_by_name}{o.ack_comment ? ` — "${o.ack_comment}"` : ''}</div>}
+        {o.status === 'tiedoksi' && <div>Tiedoksi — ei vaadi erillistä korjausta. Asia käydään läpi työmaan kanssa.</div>}
         {o.status === 'korjattu' && <div className="kx-tl-green">Korjaus varmistettu {fmtDt(o.fixed_at)}{o.fixed_by_name ? ` · ${o.fixed_by_name}` : ''}</div>}
       </div>
       {children}
