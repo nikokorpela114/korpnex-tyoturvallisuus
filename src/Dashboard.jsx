@@ -416,7 +416,7 @@ export default function Dashboard({ profile, logout }) {
       mvrCounts: mvrLatest?.counts || emptyCounts(MVR_CATEGORIES),
       obs: pdfObs,
     })
-    setPdfBlob(blob); setPdfName(filename); setPdfDownloaded(false); setPdfMode(true)
+    downloadFile(blob, filename); showToast('⬇ PDF ladattu')
   }
 
   async function makeFinalReport() {
@@ -430,19 +430,23 @@ export default function Dashboard({ profile, logout }) {
         onProgress: m => setFinalBusy(m),
       })
       setFinalOpen(false)
-      setPdfBlob(blob); setPdfName(filename); setPdfDownloaded(false); setPdfMode(true)
+      downloadFile(blob, filename); showToast('⬇ Loppuraportti ladattu')
     } catch (e) {
       console.error(e); showToast('⚠ Raportin luonti epäonnistui')
     }
     setFinalBusy('')
   }
 
-  function downloadCSV() {
-    const { blob, filename } = buildObservationsCSV({ site: selected?.name, obs: activeObs })
+  function downloadFile(blob, filename) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href = url; a.download = filename
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 3000)
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
+
+  function downloadCSV() {
+    const { blob, filename } = buildObservationsCSV({ site: selected?.name, obs: activeObs })
+    downloadFile(blob, filename)
   }
 
   const shareSupported = typeof navigator !== 'undefined' && !!navigator.share && !!navigator.canShare
