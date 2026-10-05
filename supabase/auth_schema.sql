@@ -139,6 +139,10 @@ revoke all on public.safety_observations, public.safety_measurements, public.wor
 grant select, insert, update, delete on public.safety_observations, public.safety_measurements,
   public.worksites, public.subcontractors, public.clients, public.profiles to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
+-- Edge Function (tt-admin) käyttää service_role-avainta — uusissa
+-- Supabase-projekteissa uudet taulut eivät saa oikeuksia automaattisesti.
+grant all on public.profiles, public.clients to service_role;
+grant usage, select on all sequences in schema public to service_role;
 
 alter table public.clients  enable row level security;
 alter table public.profiles enable row level security;
@@ -238,3 +242,9 @@ create policy "tt photos insert" on storage.objects for insert to authenticated
 drop policy if exists "tt photos delete" on storage.objects;
 create policy "tt photos delete" on storage.objects for delete to authenticated
   using (bucket_id = 'tt-photos' and public.tt_is_consultant());
+
+-- 7) Apufunktiot vain kirjautuneille, triggerifunktiot ei suoraan kutsuttaviksi
+revoke execute on function public.tt_is_consultant(), public.tt_my_client(), public.tt_site_visible(bigint) from public, anon;
+grant execute on function public.tt_is_consultant(), public.tt_my_client(), public.tt_site_visible(bigint) to authenticated;
+revoke execute on function public.tt_set_worksite_id(), public.tt_worksite_rename() from public, anon, authenticated;
+alter function public.tt_photo_site(text) set search_path = public;
