@@ -248,3 +248,6 @@ revoke execute on function public.tt_is_consultant(), public.tt_my_client(), pub
 grant execute on function public.tt_is_consultant(), public.tt_my_client(), public.tt_site_visible(bigint) to authenticated;
 revoke execute on function public.tt_set_worksite_id(), public.tt_worksite_rename() from public, anon, authenticated;
 alter function public.tt_photo_site(text) set search_path = public;
+
+-- 8) Havainnon luokka (putoamissuojaus, sähkö, ...) -------------------------
+alter table public.safety_observations add column if not exists luokka text;

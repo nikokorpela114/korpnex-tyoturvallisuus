@@ -102,6 +102,55 @@ export function indexColor(pct) {
 
 export const SEV_LABELS = ['Kriittinen', 'Huomio', 'Info']
 
+// Havainnon luokka — samat aihepiirit kuin TR-mittarissa + suojaimet ja muu.
+// Näiden avulla nähdään mikä toistuu (esim. "60 % putoamissuojausta").
+export const OBS_CATEGORIES = [
+  'Putoamissuojaus', 'Telineet ja tikkaat', 'Suojaimet ja työtavat', 'Koneet ja laitteet',
+  'Sähkö ja valaistus', 'Järjestys ja kulkutiet', 'Pöly ja kemikaalit', 'Muu',
+]
+
+const DAY = 864e5
+// Viikon maanantai (paikallista aikaa) aikaleimana.
+export function weekStart(d) {
+  const x = new Date(d); x.setHours(0, 0, 0, 0)
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7))
+  return x.getTime()
+}
+export function isoWeek(t) {
+  const d = new Date(t); d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7))
+  const w1 = new Date(d.getFullYear(), 0, 4)
+  return 1 + Math.round(((d - w1) / DAY - 3 + ((w1.getDay() + 6) % 7)) / 7)
+}
+
+// Urakoitsijakohtaiset tunnusluvut havainnoista.
+export function contractorStats(obs, weeks = 12) {
+  const now = Date.now()
+  const lastWeek = weekStart(now)
+  const map = new Map()
+  for (const o of obs) {
+    const name = (o.yritys || '').trim() || 'Ei merkitty'
+    if (!map.has(name)) map.set(name, { name, total: 0, Kriittinen: 0, Huomio: 0, Info: 0, avoin: 0, kuitattu: 0, korjattu: 0, myohassa: 0, fixDays: [], luokat: {}, weekly: new Array(weeks).fill(0), obs: [] })
+    const r = map.get(name)
+    r.total++; r.obs.push(o)
+    if (r[o.sev] != null) r[o.sev]++
+    const st = o.status === 'korjattu' || o.status === 'kuitattu' ? o.status : 'avoin'
+    r[st]++
+    if (o.due_date && st !== 'korjattu' && new Date(o.due_date + 'T23:59:59') < new Date()) r.myohassa++
+    if (st === 'korjattu' && o.fixed_at && o.created_at) r.fixDays.push((new Date(o.fixed_at) - new Date(o.created_at)) / DAY)
+    if (o.luokka) r.luokat[o.luokka] = (r.luokat[o.luokka] || 0) + 1
+    const wi = weeks - 1 - Math.round((lastWeek - weekStart(o.created_at)) / (7 * DAY))
+    if (wi >= 0 && wi < weeks) r.weekly[wi]++
+  }
+  return [...map.values()].map(r => ({
+    ...r,
+    avgFix: r.fixDays.length ? r.fixDays.reduce((a, b) => a + b, 0) / r.fixDays.length : null,
+    topLuokat: Object.entries(r.luokat).sort((a, b) => b[1] - a[1]),
+  }))
+}
+
+export const fmtDays = v => v == null ? '–' : v.toFixed(1).replace('.', ',')
+
 // Kokoaa havainnoista yhteenvedon: kokonaismäärät vakavuuksittain ja tilan
 // mukaan, sekä erittely urakoitsijoittain (yritys-kentän mukaan). Käytetään
 // sekä Valvomon Yhteenveto-välilehdellä että PDF-raportissa, jotta pitkänkin
@@ -141,7 +190,7 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
   let y = 18
   const dateStr = new Date().toLocaleDateString('fi-FI')
 
-  doc.setFillColor(23, 39, 92)
+  doc.setFillColor(10, 20, 40)
   doc.rect(0, 0, W, 28, 'F')
   doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(199, 203, 214)
   doc.text('KORPNEX', M, 12)
@@ -165,7 +214,7 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
     const { pct, total } = overallIndex(counts, categories)
     if (!total) return
     ensureSpace(16)
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(10, 20, 40)
     doc.text(title, M, y); y += 2
     const col = pct >= 90 ? [26, 138, 80] : pct >= 75 ? [208, 120, 0] : [214, 48, 48]
     doc.setFillColor(...col)
@@ -232,7 +281,7 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
   if (obs.length > 0) {
     const summary = summarizeObservations(obs)
     ensureSpace(20)
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(10, 20, 40)
     doc.text('Yhteenveto', M, y); y += 9
 
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
@@ -277,7 +326,7 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
 
   if (obs.length > 0) {
     ensureSpace(14 + 16 + (obs[0]?.photos?.length ? 72 : 0))
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(23, 39, 92)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(10, 20, 40)
     doc.text('Havainnot', M, y); y += 9
 
     const sevCol = { Kriittinen: [214, 48, 48], Huomio: [208, 120, 0], Info: [26, 138, 80] }
@@ -356,7 +405,7 @@ export async function buildReportPDF({ site, inspector, trCounts, mvrCounts, obs
           try { doc.addImage(ph.data, 'JPEG', x, y, dw, dh) } catch {}
           if (ph.label) {
             doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(255, 255, 255)
-            doc.setFillColor(23, 39, 92); doc.rect(x, y, doc.getTextWidth(ph.label) + 4, 5.5, 'F')
+            doc.setFillColor(10, 20, 40); doc.rect(x, y, doc.getTextWidth(ph.label) + 4, 5.5, 'F')
             doc.text(ph.label, x + 2, y + 3.9)
           }
         })

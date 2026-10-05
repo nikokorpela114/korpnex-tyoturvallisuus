@@ -54,6 +54,7 @@ export function ObsCard({ o, urls, showSite, onOpenPhoto, children }) {
       <div className="kx-obs-title">{o.havainto || '(ei kuvausta)'}</div>
       <div className="kx-obs-meta-row">
         {o.yritys && <span><b style={{ color: '#334155', fontWeight: 600 }}>{o.yritys}</b></span>}
+        {o.luokka && <span className="kx-luokka">{o.luokka}</span>}
         {o.due_date && <span style={overdue(o) ? { color: '#dc2626', fontWeight: 700 } : undefined}>Korjattava {fmt(o.due_date)} mennessä{overdue(o) ? ' — myöhässä' : ''}</span>}
         {o.inspector && <span>Tarkastaja: {o.inspector}</span>}
       </div>
@@ -200,6 +201,7 @@ export const OBS_REVIEW_CSS = `
 .kx-hint { font-size: 12px; color: #64748b; line-height: 1.5; }
 .kx-lightbox { position: fixed; inset: 0; background: rgba(5,10,20,.92); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; cursor: zoom-out; }
 .kx-lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.kx-luokka { background: #eef5ff; color: #0a5bb5; font-weight: 600; font-size: 11.5px; padding: 1px 8px; border-radius: 10px; }
 .kx-filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
 .kx-filter { padding: 7px 14px; border-radius: 20px; border: 1px solid #dbe1ea; background: #fff; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; transition: all .15s; }
 .kx-filter:hover:not(.active) { border-color: #cbd3df; color: #0f172a; }

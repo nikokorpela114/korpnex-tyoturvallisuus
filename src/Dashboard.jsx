@@ -2,12 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { sb } from './supabaseClient.js'
 import {
   TR_CATEGORIES, MVR_CATEGORIES, TR_LEGAL_NOTE, MVR_LEGAL_NOTE,
-  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, buildReportPDF, summarizeObservations,
+  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, OBS_CATEGORIES, buildReportPDF, summarizeObservations,
   addNote, updateNote, removeNote,
 } from './shared.js'
 import ClientsPanel, { CLIENTS_CSS } from './ClientsPanel.jsx'
 import { ObsCard, AckAction, ReviewAction, Lightbox, StatusTag, overdue, OBS_REVIEW_CSS } from './ObsReview.jsx'
 import { usePhotoUrls, photoAsDataUrl } from './photos.js'
+import ContractorsPanel, { CONTRACTORS_CSS } from './Contractors.jsx'
+import { buildFinalReportPDF, buildObservationsCSV } from './finalReport.js'
 
 // Valvomo (?valvomo) — Korpnexin hallintapaneeli, tarkoitettu käytettäväksi
 // tietokoneella. Täältä hallitaan työmaita (lisäys / nimeäminen / arkistointi),
@@ -34,6 +36,9 @@ export default function Dashboard({ profile, logout }) {
   const [lightbox, setLightbox] = useState(null)
   const [obsFilter, setObsFilter] = useState('avoimet')
   const [sitesLoaded, setSitesLoaded] = useState(false)
+  const [finalOpen, setFinalOpen] = useState(false)
+  const [finalPhotos, setFinalPhotos] = useState(true)
+  const [finalBusy, setFinalBusy] = useState('')
   const [worksites, setWorksites] = useState([])
   const [archivedSites, setArchivedSites] = useState([])
   const [showArchivedSites, setShowArchivedSites] = useState(false)
@@ -212,7 +217,7 @@ export default function Dashboard({ profile, logout }) {
   }
 
   async function saveObs(o) {
-    const patch = { havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note, status: o.status, due_date: o.due_date || null }
+    const patch = { havainto: o.havainto, yritys: (o.yritys || '').trim(), sev: o.sev, luokka: o.luokka || null, note: o.note, status: o.status, due_date: o.due_date || null }
     const before = obs.find(x => x.id === o.id)
     if (o.status === 'korjattu' && !o.fixed_at) {
       patch.fixed_at = new Date().toISOString(); patch.fixed_by_name = profile?.name || null
@@ -414,6 +419,32 @@ export default function Dashboard({ profile, logout }) {
     setPdfBlob(blob); setPdfName(filename); setPdfDownloaded(false); setPdfMode(true)
   }
 
+  async function makeFinalReport() {
+    if (!selected) return
+    setFinalBusy('Kootaan raporttia…')
+    try {
+      const { blob, filename } = await buildFinalReportPDF({
+        site: selected.name, clientName: selectedClient?.name || myClient?.name || '',
+        obs: activeObs, trRows, mvrRows,
+        photoLoader: finalPhotos ? photoAsDataUrl : null,
+        onProgress: m => setFinalBusy(m),
+      })
+      setFinalOpen(false)
+      setPdfBlob(blob); setPdfName(filename); setPdfDownloaded(false); setPdfMode(true)
+    } catch (e) {
+      console.error(e); showToast('⚠ Raportin luonti epäonnistui')
+    }
+    setFinalBusy('')
+  }
+
+  function downloadCSV() {
+    const { blob, filename } = buildObservationsCSV({ site: selected?.name, obs: activeObs })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 3000)
+  }
+
   const shareSupported = typeof navigator !== 'undefined' && !!navigator.share && !!navigator.canShare
   async function sharePDF() {
     if (!pdfBlob) return
@@ -448,7 +479,7 @@ export default function Dashboard({ profile, logout }) {
 
   return (
     <div className="kx-dashboard">
-      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS}</style>
+      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS + CONTRACTORS_CSS}</style>
 
       {/* Topbar */}
       <div className="kx-topbar">
@@ -599,6 +630,7 @@ export default function Dashboard({ profile, logout }) {
                 </div>
                 <div className="kx-main-head-actions">
                   <button className="kx-btn-ghost" onClick={refresh}>🔄 Päivitä</button>
+                  <button className="kx-btn-ghost" onClick={() => setFinalOpen(true)}>📑 Loppuraportti</button>
                   <button className="kx-btn-primary" onClick={exportPDF}>📄 PDF</button>
                 </div>
               </div>
@@ -611,7 +643,8 @@ export default function Dashboard({ profile, logout }) {
                   ['havainnot', 'Havainnot', openCount + ackCount || null],
                   ['tr', 'TR-mittaus', trResult.total ? `${trResult.pct} %` : null],
                   ['mvr', 'MVR-mittaus', mvrResult.total ? `${mvrResult.pct} %` : null],
-                  ...(isC ? [['aliurakoitsijat', 'Aliurakoitsijat', subcontractors.length || null]] : []),
+                  ['urakoitsijat', 'Urakoitsijat', null],
+                  ...(isC ? [['aliurakoitsijat', 'Urakoitsijalista', subcontractors.length || null]] : []),
                 ].map(([key, label, count]) => (
                   <button key={key} className={`kx-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}>
                     {label}{count != null && <em className="kx-tab-count">{count}</em>}
@@ -721,6 +754,11 @@ export default function Dashboard({ profile, logout }) {
                   />
                 )}
 
+                {tab === 'urakoitsijat' && (
+                  <ContractorsPanel obs={activeObs} isC={isC} worksiteId={selected.id} urls={urls} onOpenPhoto={setLightbox}
+                    showToast={showToast} onChanged={() => loadSite(selected.name)} />
+                )}
+
                 {tab === 'aliurakoitsijat' && isC && (
                   <SubcontractorsPanel
                     active={subcontractors} archived={archivedSub}
@@ -737,6 +775,29 @@ export default function Dashboard({ profile, logout }) {
       )}
 
       <Lightbox url={lightbox} onClose={() => setLightbox(null)} />
+
+      {finalOpen && selected && (
+        <div className="kx-pdf-overlay" onClick={() => !finalBusy && setFinalOpen(false)}>
+          <div className="kx-modal" onClick={e => e.stopPropagation()}>
+            <div className="kx-modal-title">Työmaan loppuraportti</div>
+            <div className="kx-main-sub" style={{ marginTop: 0 }}>{selected.name} · {activeObs.length} havaintoa · {trRows.length + mvrRows.length} mittausta</div>
+            <ul className="kx-modal-list">
+              <li>Avainluvut ja turvallisuusindeksin kehitys koko työmaan ajalta</li>
+              <li>Urakoitsijavertailu ja yleisimmät aiheet</li>
+              <li>Avoinna olevat puutteet</li>
+              <li>Liitteenä koko havaintoluettelo</li>
+            </ul>
+            <label className="kx-checkbox-row" style={{ margin: 0 }}>
+              <input type="checkbox" checked={finalPhotos} onChange={e => setFinalPhotos(e.target.checked)} />
+              Liitä ennen- ja jälkeen-kuvat (raportti kasvaa)
+            </label>
+            <div className="kx-modal-actions">
+              <button className="kx-btn-ghost" disabled={!!finalBusy} onClick={downloadCSV}>⬇ Excel (CSV)</button>
+              <button className="kx-btn-primary" disabled={!!finalBusy} onClick={makeFinalReport}>{finalBusy || '📑 Luo PDF'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {toast && <div className="kx-toast">{toast}</div>}
 
       {/* PDF overlay */}
@@ -1067,6 +1128,13 @@ function ObservationsPanel({ obs, showArchived, setShowArchived, onChange, onSav
                   <button key={s} className={`kx-choice-btn ${o.sev === s ? 'active' : ''}`} style={o.sev === s ? { color: sevColor[s] } : undefined} onClick={() => onChange(o.id, 'sev', s)}>{s}</button>
                 ))}
               </div>
+            </div>
+            <div className="kx-field">
+              <div className="kx-label">Luokka</div>
+              <select className="kx-input" value={o.luokka || ''} onChange={e => onChange(o.id, 'luokka', e.target.value)}>
+                <option value="">— ei luokiteltu —</option>
+                {OBS_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
             </div>
             <div className="kx-field">
               <div className="kx-label">Tila</div>
@@ -1497,6 +1565,10 @@ button.kx-kpi:hover { border-color: #cbd3df; box-shadow: 0 6px 18px rgba(15,23,4
 .kx-pdf-text.success { color: #059669; font-weight: 600; }
 .kx-pdf-text.success span { color: #64748b; font-weight: 400; }
 
+.kx-modal { background: #fff; border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 14px; max-width: 460px; box-shadow: 0 30px 80px rgba(0,0,0,.35); }
+.kx-modal-title { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 20px; font-weight: 800; color: #0a1428; }
+.kx-modal-list { margin: 0; padding-left: 18px; font-size: 13.5px; color: #334155; line-height: 1.7; }
+.kx-modal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .kx-trend-svg { width: 100%; height: auto; display: block; margin-top: 10px; overflow: visible; }
 .kx-trend-legend { display: flex; gap: 14px; font-size: 12px; color: #64748b; flex-wrap: wrap; }
 .kx-trend-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }

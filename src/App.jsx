@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { sb } from './supabaseClient.js'
 import {
   TR_CATEGORIES, MVR_CATEGORIES, TR_LEGAL_NOTE, MVR_LEGAL_NOTE,
-  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, compressImage, buildReportPDF,
+  emptyCounts, categoryPct, overallIndex, indexColor, SEV_LABELS, OBS_CATEGORIES, compressImage, buildReportPDF,
   addNote, updateNote, removeNote,
 } from './shared.js'
 import FollowUp, { useFollowUp } from './FollowUp.jsx'
@@ -67,6 +67,8 @@ export default function App({ profile, logout }) {
   // arvon eivätkä jää kiinni siihen state-arvoon joka oli voimassa silloin kun
   // closure luotiin (React-classic "stale closure" -ongelma).
   const worksitesRef = useRef([])
+  const subsRef = useRef([])
+  const addingSubRef = useRef(new Set())
   const savingRef = useRef(new Set())   // havainnot joiden tallennus on kesken
   const resaveRef = useRef(new Set())   // ja jotka pitää tallentaa uudelleen sen jälkeen
   const trCountsRef = useRef(trCounts)
@@ -75,6 +77,7 @@ export default function App({ profile, logout }) {
   const mvrDbIdRef = useRef(mvrDbId)
   useEffect(() => { obsRef.current = obs }, [obs])
   useEffect(() => { worksitesRef.current = worksites }, [worksites])
+  useEffect(() => { subsRef.current = subcontractors }, [subcontractors])
   useEffect(() => { metaRef.current = { site, inspector } }, [site, inspector])
   useEffect(() => { trCountsRef.current = trCounts }, [trCounts])
   useEffect(() => { mvrCountsRef.current = mvrCounts }, [mvrCounts])
@@ -220,8 +223,11 @@ export default function App({ profile, logout }) {
         setObs(prev => prev.map(x => x.id === o.id
           ? { ...x, photos: x.photos.map(p => p.path ? p : { ...p, path: bySrc.get(p.src) || undefined }) } : x))
       }
+      // Urakoitsijan nimi aina samassa muodossa (tilastot), uusi nimi
+      // lisätään automaattisesti työmaan aliurakoitsijalistalle.
+      const yritys = canonicalYritys(o.yritys)
       const data = {
-        havainto: o.havainto, yritys: o.yritys, sev: o.sev, note: o.note,
+        havainto: o.havainto, yritys, sev: o.sev, note: o.note, luokka: o.luokka || null,
         due_date: o.due_date || null,
         photos: photos.filter(p => p.path).map(p => ({ path: p.path })),
         site: currentSite, inspector: currentInspector,
@@ -260,6 +266,28 @@ export default function App({ profile, logout }) {
     return null
   }
 
+  function canonicalYritys(raw) {
+    const name = (raw || '').trim().replace(/\s+/g, ' ')
+    if (!name) return ''
+    const hit = subsRef.current.find(x => x.name.trim().toLowerCase() === name.toLowerCase())
+    return hit ? hit.name : name
+  }
+
+  // Käsin kirjoitettu uusi urakoitsija lisätään työmaan listalle, kun kenttä
+  // jätetään (ei jokaisesta näppäilystä — muuten listalle tulisi "Tel", "Teli"...).
+  function ensureSubcontractor(raw) {
+    const name = (raw || '').trim().replace(/\s+/g, ' ')
+    const siteName = metaRef.current.site
+    if (name.length < 2 || !siteName) return
+    const key = name.toLowerCase()
+    if (subsRef.current.some(x => x.name.trim().toLowerCase() === key) || addingSubRef.current.has(key)) return
+    addingSubRef.current.add(key)
+    sb.from('subcontractors').insert([{ site: siteName, name }]).select().then(({ data, error }) => {
+      if (!error && data?.[0]) setSubcontractors(prev => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name)))
+      else addingSubRef.current.delete(key)
+    })
+  }
+
   function scheduleSave(id) {
     setObs(prev => prev.map(o => {
       if (o.id !== id) return o
@@ -274,7 +302,7 @@ export default function App({ profile, logout }) {
   function addObs() {
     const id = ++idCounter
     setObs(prev => [...prev, {
-      id, havainto: '', yritys: '', sev: 'Huomio', note: '', due_date: '', photos: [],
+      id, havainto: '', yritys: '', sev: 'Huomio', luokka: '', note: '', due_date: '', photos: [],
       db_id: null, createdAt: new Date().toISOString(),
     }])
   }
@@ -588,7 +616,7 @@ export default function App({ profile, logout }) {
                     <div style={labelStyle}>Yritys</div>
                     {(subcontractors.length === 0 || obsYritysCustom[o.id] || (o.yritys && !subcontractors.some(s => s.name === o.yritys))) ? (
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <input style={{ ...inputStyle, flex: 1 }} placeholder="Mikä yritys / aliurakoitsija" value={o.yritys} onChange={e => updateObs(o.id, 'yritys', e.target.value)} />
+                        <input style={{ ...inputStyle, flex: 1 }} placeholder="Mikä yritys / aliurakoitsija" value={o.yritys} onChange={e => updateObs(o.id, 'yritys', e.target.value)} onBlur={e => ensureSubcontractor(e.target.value)} />
                         {subcontractors.length > 0 && (
                           <button onClick={() => { setObsYritysCustom(p => ({ ...p, [o.id]: false })); updateObs(o.id, 'yritys', '') }}
                             title="Takaisin listaan" style={{ padding: '0 12px', borderRadius: 10, border: '1px solid #e3e8ef', background: '#f1f4f9', color: '#64748b', fontSize: 12 }}>↩</button>
@@ -617,6 +645,19 @@ export default function App({ profile, logout }) {
                           background: o.sev === s ? sevBg[s] : '#f1f4f9',
                           color: o.sev === s ? sevColor[s] : '#64748b',
                         }}>{s}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Luokka</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {OBS_CATEGORIES.map(c => (
+                        <button key={c} onClick={() => updateObs(o.id, 'luokka', o.luokka === c ? '' : c)} style={{
+                          padding: '7px 11px', borderRadius: 20, fontSize: 12.5, fontWeight: 600,
+                          border: `1px solid ${o.luokka === c ? '#0878E8' : '#e3e8ef'}`,
+                          background: o.luokka === c ? '#eaf3fe' : '#fff',
+                          color: o.luokka === c ? '#0a5bb5' : '#64748b',
+                        }}>{c}</button>
                       ))}
                     </div>
                   </div>
