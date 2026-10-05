@@ -251,3 +251,6 @@ alter function public.tt_photo_site(text) set search_path = public;
 
 -- 8) Havainnon luokka (putoamissuojaus, sähkö, ...) -------------------------
 alter table public.safety_observations add column if not exists luokka text;
+
+-- 9) Työmaan päättymispäivä (säilytysajat lasketaan tästä) ------------------
+alter table public.worksites add column if not exists ended_at date;

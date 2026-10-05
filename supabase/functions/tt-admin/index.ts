@@ -9,6 +9,7 @@
 //     notify_ack  { observation_id }           asiakas kuittasi → viesti konsulteille
 //
 //   Vain konsultti:
+//     notify_report { site, report_id }        tarkastus valmis → viesti asiakkaalle
 //     list                                      kaikki käyttäjät
 //     invite      { email, name, client_id, role? }  luo tunnuksen + kutsu
 //     resend      { user_id }                   uusi salasanalinkki
@@ -149,6 +150,43 @@ Deno.serve(async (req) => {
 
     // --- Vain konsultti ---------------------------------------------------
     if (me.role !== 'konsultti') return json({ error: 'Vain Korpnex voi hallita käyttäjiä.' }, 403)
+
+    // Tarkastuskierros valmis → ilmoitus asiakkaan käyttäjille
+    if (action === 'notify_report') {
+      const site = String(body.site || '')
+      const reportId = String(body.report_id || '')
+      const { data: ws } = await admin.from('worksites').select('id, name, client_id').eq('name', site).maybeSingle()
+      if (!ws) return json({ error: 'Työmaata ei löytynyt.' }, 404)
+      if (!ws.client_id) return json({ error: 'Työmaata ei ole liitetty asiakkaaseen. Liitä se Valvomossa (työmaa → Asiakas).' }, 400)
+      const { data: users } = await admin.from('profiles').select('email, name').eq('client_id', ws.client_id).eq('role', 'asiakas')
+      const to = (users || []).filter(u => u.email)
+      if (!to.length) return json({ error: 'Asiakkaalla ei ole vielä käyttäjiä. Kutsu ne Valvomon Asiakkaat-näkymästä.' }, 400)
+      const [{ data: obs }, { data: meas }, { data: openRows }] = await Promise.all([
+        admin.from('safety_observations').select('havainto, sev, yritys, due_date').eq('worksite_id', ws.id).eq('report_id', reportId).eq('archived', false).order('created_at'),
+        admin.from('safety_measurements').select('type, index_pct').eq('worksite_id', ws.id).eq('report_id', reportId).eq('archived', false),
+        admin.from('safety_observations').select('id, status').eq('worksite_id', ws.id).eq('archived', false).in('status', ['avoin', 'kuitattu']),
+      ])
+      const list = obs || []
+      const crit = list.filter(o => o.sev === 'Kriittinen').length
+      const openCount = (openRows || []).filter(o => o.status === 'avoin').length
+      const sevCol: Record<string, string> = { Kriittinen: '#dc2626', Huomio: '#d97706', Info: '#059669' }
+      const idx = (meas || []).filter(m => m.index_pct != null).map(m =>
+        `<td style="padding:10px 14px;background:#f4f6fa;border-radius:8px;text-align:center;"><div style="font-size:22px;font-weight:bold;color:${Number(m.index_pct) >= 90 ? '#059669' : Number(m.index_pct) >= 75 ? '#d97706' : '#dc2626'};">${esc(m.index_pct)} %</div><div style="font-size:12px;color:#64748b;">${m.type === 'mvr' ? 'MVR' : 'TR'}-indeksi</div></td>`).join('<td style="width:8px"></td>')
+      const rows = list.slice(0, 10).map(o => `<tr><td style="padding:7px 0;border-bottom:1px solid #eef1f6;font-size:14px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sevCol[o.sev] || '#94a3b8'};margin-right:8px;"></span>${esc(o.havainto || '(ei kuvausta)')}${o.yritys ? `<span style="color:#64748b;"> · ${esc(o.yritys)}</span>` : ''}</td></tr>`).join('')
+      const date = new Date().toLocaleDateString('fi-FI', { timeZone: 'Europe/Helsinki' })
+      const html = layout(`Uusi tarkastus: ${esc(ws.name)}`, `
+        <p>Korpnex teki työmaalla työturvallisuustarkastuksen ${date}${me.name ? ` (${esc(me.name)})` : ''}. Tulokset ovat nyt portaalissa.</p>
+        <p style="font-size:15px;"><b>${list.length} ${list.length === 1 ? 'uusi havainto' : 'uutta havaintoa'}</b>${crit ? `, joista <b style="color:#dc2626;">${crit} kriittistä</b>` : ''}.</p>
+        ${idx ? `<table style="border-collapse:separate;margin:12px 0;"><tr>${idx}</tr></table>` : ''}
+        ${rows ? `<table style="width:100%;border-collapse:collapse;margin:8px 0 4px;">${rows}</table>${list.length > 10 ? `<p style="color:#64748b;font-size:13px;">+ ${list.length - 10} muuta havaintoa</p>` : ''}` : ''}
+        <p style="background:#fff8e6;border-radius:8px;padding:10px 14px;font-size:14px;color:#7a5b00;">Työmaalla on nyt avoinna yhteensä <b>${openCount}</b> puutetta. Kun puute on korjattu, kuittaa se portaalissa — kuvan voi ottaa suoraan puhelimella.</p>
+        ${button(APP_URL + '/', 'Avaa portaali')}`)
+      let sent = 0
+      for (const u of to) {
+        try { await sendMail([u.email], `Uusi työturvallisuustarkastus: ${ws.name}`, html); sent++ } catch (e) { console.error('notify_report', u.email, e) }
+      }
+      return json({ ok: true, sent, total: to.length })
+    }
 
     if (action === 'list') {
       const { data, error } = await admin.from('profiles')

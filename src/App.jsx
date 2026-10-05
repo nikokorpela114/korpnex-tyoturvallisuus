@@ -7,6 +7,7 @@ import {
 } from './shared.js'
 import FollowUp, { useFollowUp } from './FollowUp.jsx'
 import { uploadPhoto } from './photos.js'
+import { putPhoto, getPhoto, delPhoto } from './photoStore.js'
 
 let idCounter = 0
 // Jokaisella työmaalla on oma keskeneräinen luonnoksensa tässä kartassa,
@@ -110,11 +111,24 @@ export default function App({ profile, logout }) {
       .then(({ data, error }) => { if (!error) setSubcontractors(data || []) })
   }, [site])
 
+  // Luonnoksessa kuvista on vain tunniste — itse kuva haetaan laitteen
+  // IndexedDB:stä (ks. photoStore.js).
+  async function hydratePhotos(list) {
+    for (const o of list) {
+      for (const p of (o.photos || [])) {
+        if (!p.id || p.src) continue
+        const src = await getPhoto(p.id)
+        if (src) setObs(prev => prev.map(x => x.id !== o.id ? x : { ...x, photos: x.photos.map(q => q.id === p.id ? { ...q, src } : q) }))
+      }
+    }
+  }
+
   function applyDraft(siteName, d) {
     setSite(siteName)
     reportIdRef.current = d?.reportId || uuid()
     const restoredObs = d?.obs?.length ? d.obs : []
     setObs(restoredObs)
+    hydratePhotos(restoredObs)
     if (restoredObs.length) idCounter = Math.max(idCounter, ...restoredObs.map(o => o.id || 0))
     setTrCounts(d?.trCounts || emptyCounts(TR_CATEGORIES))
     setMvrCounts(d?.mvrCounts || emptyCounts(MVR_CATEGORIES))
@@ -150,7 +164,10 @@ export default function App({ profile, logout }) {
       const map = loadDraftsMap()
       map[site] = {
         reportId: reportIdRef.current,
-        obs: obs.map(({ _timer, ...rest }) => rest),
+        obs: obs.map(({ _timer, ...rest }) => ({
+          ...rest,
+          photos: (rest.photos || []).map(p => p.id ? { id: p.id, path: p.path } : p),
+        })),
         trCounts, mvrCounts, trDbId, mvrDbId,
       }
       localStorage.setItem(DRAFTS_KEY, JSON.stringify(map))
@@ -337,14 +354,18 @@ export default function App({ profile, logout }) {
     for (const file of Array.from(files)) {
       const src = await compressImage(file, 1280, 0.72)
       if (!src) continue
-      setObs(prev => prev.map(o => o.id !== id ? o : { ...o, photos: [...o.photos, { src }] }))
+      const pid = uuid()
+      await putPhoto(pid, src)
+      setObs(prev => prev.map(o => o.id !== id ? o : { ...o, photos: [...o.photos, { id: pid, src }] }))
     }
     scheduleSave(id)
   }
   function removePhoto(id, pi) {
     setObs(prev => prev.map(o => {
       if (o.id !== id) return o
-      const photos = [...o.photos]; photos.splice(pi, 1)
+      const photos = [...o.photos]
+      const [gone] = photos.splice(pi, 1)
+      if (gone?.id) delPhoto(gone.id)
       return { ...o, photos }
     }))
     scheduleSave(id)
@@ -376,6 +397,29 @@ export default function App({ profile, logout }) {
   const handleAddNote = (type, catKey) => noteAction(type, addNote, catKey)
   const handleUpdateNote = (type, catKey, id, patch) => noteAction(type, (c) => updateNote(c, catKey, id, patch))
   const handleRemoveNote = (type, catKey, id) => noteAction(type, (c) => removeNote(c, catKey, id))
+
+  // Mittauksen puute → havainnoksi, jolloin se kulkee samaa reittiä kuin muut
+  // havainnot: asiakas näkee ja voi kuitata sen, ja se näkyy urakoitsijatilastoissa.
+  const NOTE_LUOKKA = {
+    tyoskentely: 'Suojaimet ja työtavat', telineet: 'Telineet ja tikkaat', koneet: 'Koneet ja laitteet',
+    putoamissuojaus: 'Putoamissuojaus', sahko: 'Sähkö ja valaistus', jarjestys: 'Järjestys ja kulkutiet', poly: 'Pöly ja kemikaalit',
+    tyoskentely_koneet: 'Suojaimet ja työtavat', kalusto: 'Koneet ja laitteet', suojaukset: 'Putoamissuojaus',
+    kulkuvaylat: 'Järjestys ja kulkutiet', jarjestys_varastointi: 'Järjestys ja kulkutiet',
+  }
+  function noteToObservation(type, catKey, n) {
+    if (!(n.desc || '').trim()) return
+    const o = {
+      id: ++idCounter, havainto: n.desc.trim(), yritys: canonicalYritys(n.vastuuhenkilo), sev: 'Huomio',
+      luokka: NOTE_LUOKKA[catKey] || '', note: `${type === 'tr' ? 'TR' : 'MVR'}-mittauksen puute`, due_date: '', photos: [],
+      db_id: null, createdAt: new Date().toISOString(),
+    }
+    setObs(prev => [...prev, o])
+    obsRef.current = [...obsRef.current, o]
+    handleRemoveNote(type, catKey, n.id)
+    setTab('havainnot')
+    setTimeout(() => saveObs(o, metaRef.current.site, metaRef.current.inspector), 50)
+    showSync('➜ Siirretty havainnoksi — lisää halutessasi kuva')
+  }
 
   function resetMeasurement(type) {
     const label = type === 'tr' ? 'TR-mittauksen' : 'MVR-mittauksen'
@@ -448,7 +492,10 @@ export default function App({ profile, logout }) {
 
   async function newReport() {
     const hasContent = obs.length > 0 || overallIndex(trCounts, TR_CATEGORIES).total > 0 || overallIndex(mvrCounts, MVR_CATEGORIES).total > 0
-    if (hasContent && !window.confirm(`Aloitetaanko uusi raportti työmaalle "${site}"? Nykyinen sisältö poistetaan tältä laitteelta (jo pilveen tallentunut säilyy Supabasessa ennallaan).`)) return
+    const unsent = obs.filter(o => !o.db_id || (o.photos || []).some(p => !p.path)).length
+    if (unsent && !window.confirm(`⚠ ${unsent} havaintoa tai kuvaa ei ole vielä lähetetty pilveen (ei verkkoyhteyttä?). Jos aloitat uuden raportin nyt, ne katoavat.\n\nAloitetaanko silti?`)) return
+    if (!unsent && hasContent && !window.confirm(`Aloitetaanko uusi raportti työmaalle "${site}"? Luonnos tyhjennetään tältä laitteelta — kaikki on jo tallessa pilvessä ja näkyy Seuranta-välilehdellä.`)) return
+    obs.forEach(o => (o.photos || []).forEach(p => { if (p.id) delPhoto(p.id) }))
     const currentSite = site
     setObs([])
     setTrDbId(null); setMvrDbId(null)
@@ -465,6 +512,31 @@ export default function App({ profile, logout }) {
     followUp.reload()
     // Tallennus-effect kirjoittaa uuden tilan tämän työmaan kohtaan
     // kartassa automaattisesti heti kun obs/trCounts/mvrCounts päivittyvät.
+  }
+
+  // --- Tarkastus valmis → sähköposti asiakkaan käyttäjille ---
+  const [sending, setSending] = useState(false)
+  const [reportSent, setReportSent] = useState(false)
+  useEffect(() => { setReportSent(false) }, [site])
+  async function sendToClient() {
+    if (!site) return
+    const trTotal = overallIndex(trCounts, TR_CATEGORIES).total
+    const mvrTotal = overallIndex(mvrCounts, MVR_CATEGORIES).total
+    if (!obs.length && !trTotal && !mvrTotal) { alert('Kierroksella ei ole vielä havaintoja tai mittauksia.'); return }
+    if (!navigator.onLine) { alert('Ei verkkoyhteyttä — lähetä kun yhteys palaa.'); return }
+    retrySync()
+    const unsent = obs.filter(o => !o.db_id || (o.photos || []).some(p => !p.path)).length
+    if (unsent) { alert(`${unsent} havaintoa tai kuvaa on vielä lähettämättä pilveen. Odota hetki (oranssit pallot katoavat) ja yritä uudelleen.`); return }
+    if (!window.confirm(`Lähetetäänkö asiakkaalle ilmoitus tästä tarkastuksesta?\n\n${site}: ${obs.length} havaintoa${trTotal ? `, TR ${overallIndex(trCounts, TR_CATEGORIES).pct} %` : ''}${mvrTotal ? `, MVR ${overallIndex(mvrCounts, MVR_CATEGORIES).pct} %` : ''}`)) return
+    setSending(true)
+    await new Promise(r => setTimeout(r, 1200)) // mittausten viimeinen tallennus ehtii perille
+    const { data, error } = await sb.functions.invoke('tt-admin', { body: { action: 'notify_report', site, report_id: reportIdRef.current } })
+    setSending(false)
+    let msg = data?.error
+    if (error) { try { msg = (await error.context?.json?.())?.error || error.message } catch { msg = error.message } }
+    if (msg) { alert('Lähetys ei onnistunut: ' + msg); return }
+    setReportSent(true)
+    showSync(`✓ Ilmoitus lähetetty ${data?.sent || 0} käyttäjälle`)
   }
 
   // --- PDF-vienti ---
@@ -717,6 +789,7 @@ export default function App({ profile, logout }) {
             onAddNote={handleAddNote}
             onUpdateNote={handleUpdateNote}
             onRemoveNote={handleRemoveNote}
+            onToObservation={noteToObservation}
           />
         )}
       </div>
@@ -724,8 +797,11 @@ export default function App({ profile, logout }) {
       {/* Bottom bar */}
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: 480, margin: '0 auto', background: '#f4f6fa', borderTop: '1px solid #e3e8ef', zIndex: 20 }}>
         <div style={{ padding: '10px 16px env(safe-area-inset-bottom, 14px)', display: 'flex', gap: 10 }}>
-          <button onClick={exportPDF} style={{ flex: 1, padding: 13, background: '#0a1428', border: 'none', borderRadius: 10, color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            📄 Vie PDF-raportti
+          <button onClick={exportPDF} style={{ flex: '0 0 auto', padding: '13px 16px', background: '#fff', border: '1px solid #e3e8ef', borderRadius: 10, color: '#0a1428', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            📄 PDF
+          </button>
+          <button onClick={sendToClient} disabled={sending} style={{ flex: 1, padding: 13, background: reportSent ? '#059669' : '#0878E8', border: 'none', borderRadius: 10, color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, opacity: sending ? 0.7 : 1 }}>
+            {sending ? 'Lähetetään…' : reportSent ? '✓ Lähetetty asiakkaalle' : '📨 Valmis – lähetä asiakkaalle'}
           </button>
         </div>
       </div>
@@ -768,7 +844,7 @@ export default function App({ profile, logout }) {
 // Yhden TR- tai MVR-mittauksen näkymä: jokaiselle havaintoluokalle kaksi
 // isoa "tukkimiehen kirjanpito" -tyylistä laskuripainiketta (Oikein/Väärin),
 // ja ylhäällä koko mittauksen kokonaisindeksi joka päivittyy heti.
-function MeasurementTab({ type, categories, counts, legalNote, subcontractors, onBump, onReset, onAddNote, onUpdateNote, onRemoveNote }) {
+function MeasurementTab({ type, categories, counts, legalNote, subcontractors, onBump, onReset, onAddNote, onUpdateNote, onRemoveNote, onToObservation }) {
   const { oikein, vaarin, total, pct } = overallIndex(counts, categories)
   const color = indexColor(pct)
   // Mikä kategorian puutelista on auki — pelkkä näyttötila, ei tallenneta.
@@ -843,7 +919,11 @@ function MeasurementTab({ type, categories, counts, legalNote, subcontractors, o
                           <span style={{ marginLeft: 6, color: '#a67c00', textTransform: 'none', fontWeight: 700, fontSize: 10.5 }}>↩ edelliseltä kierrokselta</span>
                         )}
                       </div>
-                      <button onClick={() => onRemoveNote(type, c.key, n.id)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 15 }}>🗑</button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <button disabled={!(n.desc || '').trim()} onClick={() => onToObservation(type, c.key, n)} title="Siirrä havainnoksi: asiakas näkee ja voi kuitata sen"
+                          style={{ background: '#eaf3fe', border: '1px solid #cfe3fb', borderRadius: 8, color: '#0a5bb5', fontSize: 11.5, fontWeight: 700, padding: '4px 8px', opacity: (n.desc || '').trim() ? 1 : 0.4 }}>➜ Havainnoksi</button>
+                        <button onClick={() => onRemoveNote(type, c.key, n.id)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 15 }}>🗑</button>
+                      </div>
                     </div>
                     <textarea style={{ ...selectStyle, resize: 'none', minHeight: 44, lineHeight: 1.4 }}
                       placeholder="esim. Suojakaide puuttuu tasolta 2" value={n.desc}

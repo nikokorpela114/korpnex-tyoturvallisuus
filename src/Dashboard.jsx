@@ -39,6 +39,8 @@ export default function Dashboard({ profile, logout }) {
   const [finalOpen, setFinalOpen] = useState(false)
   const [finalPhotos, setFinalPhotos] = useState(true)
   const [finalBusy, setFinalBusy] = useState('')
+  const [endOpen, setEndOpen] = useState(false)
+  const [endDate, setEndDate] = useState('')
   const [worksites, setWorksites] = useState([])
   const [archivedSites, setArchivedSites] = useState([])
   const [showArchivedSites, setShowArchivedSites] = useState(false)
@@ -419,6 +421,31 @@ export default function Dashboard({ profile, logout }) {
     downloadFile(blob, filename); showToast('⬇ PDF ladattu')
   }
 
+  // --- Työmaan päättäminen ja säilytysajat ---
+  async function setEnded(dateStr) {
+    if (!selected) return
+    const { error } = await sb.from('worksites').update({ ended_at: dateStr || null }).eq('id', selected.id)
+    if (error) { showToast('⚠ Tallennus epäonnistui'); return }
+    showToast(dateStr ? '🏁 Työmaa merkitty päättyneeksi' : '↺ Työmaa avattu uudelleen')
+    setEndOpen(false)
+    loadWorksites()
+  }
+
+  async function deleteWorksiteData(w) {
+    if (!window.confirm(`Poistetaanko työmaan "${w.name}" KAIKKI tiedot pysyvästi (havainnot, kuvat, mittaukset)?\n\nTätä ei voi perua.`)) return
+    if (window.prompt(`Vahvista kirjoittamalla työmaan nimi:\n${w.name}`) !== w.name) { showToast('Poisto peruttu'); return }
+    const { data: rows } = await sb.from('safety_observations').select('photos, ack_photo, fix_photo').eq('worksite_id', w.id)
+    const paths = (rows || []).flatMap(o => [...(o.photos || []).map(p => p.path), o.ack_photo, o.fix_photo]).filter(Boolean)
+    for (let i = 0; i < paths.length; i += 100) await sb.storage.from('tt-photos').remove(paths.slice(i, i + 100))
+    await sb.from('safety_observations').delete().eq('worksite_id', w.id)
+    await sb.from('safety_measurements').delete().eq('worksite_id', w.id)
+    await sb.from('subcontractors').delete().eq('worksite_id', w.id)
+    const { error } = await sb.from('worksites').delete().eq('id', w.id)
+    showToast(error ? '⚠ Työmaan poisto epäonnistui' : '🗑 Työmaan tiedot poistettu')
+    if (selected?.id === w.id) setSelected(null)
+    loadWorksites()
+  }
+
   async function makeFinalReport() {
     if (!selected) return
     setFinalBusy('Kootaan raporttia…')
@@ -481,6 +508,22 @@ export default function Dashboard({ profile, logout }) {
   const photoPaths = (view === 'tarkastus' ? reviewList : obs).flatMap(o => [...(o.photos || []).map(p => p.path), o.ack_photo, o.fix_photo])
   const urls = usePhotoUrls(photoPaths)
 
+  // Muistutukset (konsultti): ehdoissa luvatut käyttö- ja säilytysajat
+  const reminders = []
+  if (isC) {
+    const now = new Date()
+    const addM = (d, m) => { const x = new Date(d + 'T12:00:00'); x.setMonth(x.getMonth() + m); return x }
+    const allSites = [...worksites, ...archivedSites]
+    allSites.filter(w => w.ended_at && addM(w.ended_at, 36) < now).forEach(w =>
+      reminders.push({ key: 'del' + w.id, kind: 'del', w, text: `Työmaan "${w.name}" säilytysaika (3 v) päättyi ${addM(w.ended_at, 36).toLocaleDateString('fi-FI')}. Tiedot pitää poistaa.` }))
+    clients.filter(c => !c.archived).forEach(c => {
+      const cs = allSites.filter(w => w.client_id === c.id)
+      if (!cs.length || cs.some(w => !w.ended_at)) return
+      const last = cs.map(w => w.ended_at).sort().pop()
+      if (addM(last, 3) < now) reminders.push({ key: 'cl' + c.id, kind: 'client', text: `Asiakkaan ${c.name} kaikki työmaat ovat päättyneet ja 3 kk käyttöaika umpeutui ${addM(last, 3).toLocaleDateString('fi-FI')}. Sulje tunnukset tai arkistoi asiakas.` })
+    })
+  }
+
   return (
     <div className="kx-dashboard">
       <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS + CONTRACTORS_CSS}</style>
@@ -539,6 +582,19 @@ export default function Dashboard({ profile, logout }) {
         </div>
       )}
 
+      {isC && view === 'tyomaat' && reminders.length > 0 && (
+        <div className="kx-reminders">
+          {reminders.map(r => (
+            <div key={r.key} className="kx-reminder">
+              <span>⏰ {r.text}</span>
+              {r.kind === 'del'
+                ? <button className="kx-delete-btn" onClick={() => deleteWorksiteData(r.w)}>Poista tiedot</button>
+                : <button className="kx-btn-ghost kx-btn-sm" onClick={() => setView('asiakkaat')}>Asiakkaat →</button>}
+            </div>
+          ))}
+        </div>
+      )}
+
       {view === 'tyomaat' && (
       <div className="kx-shell">
         {/* Sidebar: työmaat */}
@@ -561,6 +617,7 @@ export default function Dashboard({ profile, logout }) {
                     <button className="kx-site-name" onClick={() => setSelected(w)}>
                       {w.name}
                       {isC && <span className="kx-site-client">{clients.find(c => c.id === w.client_id)?.name || 'ei asiakasta'}</span>}
+                      {w.ended_at && <span className="kx-site-ended">🏁 päättynyt {new Date(w.ended_at).toLocaleDateString('fi-FI')}</span>}
                     </button>
                     {isC && (
                       <div className="kx-site-actions">
@@ -633,6 +690,9 @@ export default function Dashboard({ profile, logout }) {
                   )}
                 </div>
                 <div className="kx-main-head-actions">
+                  {isC && (selected.ended_at
+                    ? <button className="kx-btn-ghost" title="Avaa työmaa uudelleen" onClick={() => window.confirm('Avataanko työmaa uudelleen?') && setEnded(null)}>🏁 Päättynyt {new Date(selected.ended_at).toLocaleDateString('fi-FI')}</button>
+                    : <button className="kx-btn-ghost" onClick={() => { setEndDate(new Date().toISOString().slice(0, 10)); setEndOpen(true) }}>🏁 Päätä työmaa</button>)}
                   <button className="kx-btn-ghost" onClick={refresh}>🔄 Päivitä</button>
                   <button className="kx-btn-ghost" onClick={() => setFinalOpen(true)}>📑 Loppuraportti</button>
                   <button className="kx-btn-primary" onClick={exportPDF}>📄 PDF</button>
@@ -779,6 +839,28 @@ export default function Dashboard({ profile, logout }) {
       )}
 
       <Lightbox url={lightbox} onClose={() => setLightbox(null)} />
+
+      {endOpen && selected && (
+        <div className="kx-pdf-overlay" onClick={() => setEndOpen(false)}>
+          <div className="kx-modal" onClick={e => e.stopPropagation()}>
+            <div className="kx-modal-title">Päätä työmaa</div>
+            <div className="kx-main-sub" style={{ marginTop: 0 }}>{selected.name}{selectedClient ? ` · ${selectedClient.name}` : ''}</div>
+            <ul className="kx-modal-list">
+              <li>Asiakas näkee työmaan edelleen. Portaali on ehtojen mukaan käytössä <b>3 kk</b> viimeisestä tarkastuksesta.</li>
+              <li>Tiedot säilytetään <b>3 vuotta</b> päättymispäivästä. Valvomo muistuttaa, kun ne pitää poistaa.</li>
+              <li>Kannattaa ladata loppuraportti nyt ja toimittaa se asiakkaalle.</li>
+            </ul>
+            <label className="kx-field">
+              <span className="kx-label">Päättymispäivä</span>
+              <input type="date" className="kx-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
+            </label>
+            <div className="kx-modal-actions">
+              <button className="kx-btn-ghost" onClick={() => { setEndOpen(false); setFinalOpen(true) }}>📑 Loppuraportti</button>
+              <button className="kx-btn-primary" disabled={!endDate} onClick={() => setEnded(endDate)}>🏁 Merkitse päättyneeksi</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {finalOpen && selected && (
         <div className="kx-pdf-overlay" onClick={() => !finalBusy && setFinalOpen(false)}>
@@ -1569,6 +1651,9 @@ button.kx-kpi:hover { border-color: #cbd3df; box-shadow: 0 6px 18px rgba(15,23,4
 .kx-pdf-text.success { color: #059669; font-weight: 600; }
 .kx-pdf-text.success span { color: #64748b; font-weight: 400; }
 
+.kx-reminders { max-width: 1240px; margin: 20px auto 0; padding: 0 24px; display: flex; flex-direction: column; gap: 8px; }
+.kx-reminder { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fff8e6; border: 1px solid #f5d38a; border-radius: 12px; padding: 10px 14px; font-size: 13.5px; color: #7a5b00; flex-wrap: wrap; }
+.kx-site-ended { font-size: 11px; font-weight: 600; color: #94a3b8; }
 .kx-modal { background: #fff; border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 14px; max-width: 460px; box-shadow: 0 30px 80px rgba(0,0,0,.35); }
 .kx-modal-title { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 20px; font-weight: 800; color: #0a1428; }
 .kx-modal-list { margin: 0; padding-left: 18px; font-size: 13.5px; color: #334155; line-height: 1.7; }
@@ -1594,7 +1679,7 @@ button.kx-kpi:hover { border-color: #cbd3df; box-shadow: 0 6px 18px rgba(15,23,4
   .kx-site-row.active::before { display: none; }
   .kx-obs-grid { grid-template-columns: 1fr; }
   .kx-main-title { font-size: 22px; }
-  .kx-main-head-actions { width: 100%; }
+  .kx-main-head-actions { width: 100%; flex-wrap: wrap; }
   .kx-main-head-actions > * { flex: 1; justify-content: center; }
   .kx-tabs { gap: 18px; }
 }
