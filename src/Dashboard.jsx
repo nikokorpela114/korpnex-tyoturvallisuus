@@ -552,7 +552,7 @@ export default function Dashboard({ profile, logout }) {
               <button className={view === 'tyoajat' ? 'active' : ''} onClick={() => setView('tyoajat')}>Työajat</button>
             </div>
           )}
-          {isC && <a className="kx-btn-ghost kx-btn-sm kx-btn-onbrand kx-hide-mobile" href="/">📱 Kenttäsovellus</a>}
+          {isC && <a className="kx-btn-ghost kx-btn-sm kx-btn-onbrand" href="/" title="Kenttäsovellus">📱<span className="kx-hide-mobile"> Kenttäsovellus</span></a>}
           <span className="kx-user-chip">{profile?.name || profile?.email}</span>
           <button className="kx-btn-ghost kx-btn-sm kx-btn-onbrand" onClick={logout} title={profile?.email}>Kirjaudu ulos</button>
         </div>

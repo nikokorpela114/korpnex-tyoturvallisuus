@@ -48,6 +48,10 @@ export default function WorkLog({ showToast }) {
   // Kenttäsovelluksen "Kirjaa työpäivä" -linkki (?uusi) avaa lomakkeen heti,
   // kun edelliset merkinnät on haettu (asiakas ja km esitäytetään niistä).
   const openNewRef = useRef(new URLSearchParams(window.location.search).has('uusi'))
+  // Tultiinko kenttäsovelluksesta (?kentta)? Silloin näytetään paluunappi ja
+  // "Kirjaa työpäivä" palaa tallennuksen jälkeen suoraan tarkastukseen.
+  const fromField = useMemo(() => new URLSearchParams(window.location.search).has('kentta'), [])
+  const backToField = () => { window.location.href = '/' }
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
@@ -184,6 +188,7 @@ export default function WorkLog({ showToast }) {
     if (res.error) { console.error('work_entries save failed:', res.error); showToast('⚠ Tallennus epäonnistui'); return }
     showToast(draft.id ? '✓ Muutokset tallennettu' : '✓ Työpäivä kirjattu')
     const saved = res.data?.[0]
+    if (fromField && !draft.id) { setTimeout(backToField, 600); return }
     setDraft(null)
     if (saved && monthKey(saved.work_date) !== month) setMonth(monthKey(saved.work_date))
     else load()
@@ -232,6 +237,9 @@ export default function WorkLog({ showToast }) {
 
   return (
     <div className="kx-wl">
+      {fromField && (
+        <button className="kx-wl-back" onClick={backToField}>← Takaisin tarkastukseen</button>
+      )}
       <div className="kx-main-head">
         <div>
           <div className="kx-main-title">Työajat</div>
@@ -551,7 +559,7 @@ export default function WorkLog({ showToast }) {
             <div className="kx-modal-actions">
               {draft.id && <button className="kx-btn-ghost" style={{ marginRight: 'auto', color: '#b91c1c' }} onClick={() => archive(draft)}>🗑 Poista</button>}
               <button className="kx-btn-ghost" disabled={saving} onClick={() => setDraft(null)}>Peruuta</button>
-              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? 'Tallenna muutokset' : 'Kirjaa työpäivä'}</button>
+              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? 'Tallenna muutokset' : fromField ? 'Kirjaa ja palaa tarkastukseen' : 'Kirjaa työpäivä'}</button>
             </div>
           </div>
         </div>
@@ -563,6 +571,9 @@ export default function WorkLog({ showToast }) {
 export const WORKLOG_CSS = `
 .kx-wl { display: flex; flex-direction: column; gap: 16px; max-width: 980px; }
 .kx-wl .kx-main-head { margin-bottom: 0; }
+.kx-wl-back { align-self: flex-start; background: #0a1428; color: #fff; border: none; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.kx-wl-back:hover { background: #17275c; }
+.kx-wl-back:focus-visible { outline: 2px solid #0878E8; outline-offset: 2px; }
 .kx-wl-monthbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kx-wl-month { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 17px; font-weight: 800; color: #0a1428; min-width: 150px; text-align: center; }
 .kx-wl-monthstats { margin-left: auto; display: flex; gap: 12px; align-items: baseline; font-size: 13.5px; color: #475569; flex-wrap: wrap; }
