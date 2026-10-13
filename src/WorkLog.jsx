@@ -188,7 +188,7 @@ export default function WorkLog({ showToast }) {
     if (res.error) { console.error('work_entries save failed:', res.error); showToast('⚠ Tallennus epäonnistui'); return }
     showToast(draft.id ? '✓ Muutokset tallennettu' : '✓ Työpäivä kirjattu')
     const saved = res.data?.[0]
-    if (fromField && !draft.id) { setTimeout(backToField, 600); return }
+    if (fromField) { setTimeout(backToField, 600); return }
     setDraft(null)
     if (saved && monthKey(saved.work_date) !== month) setMonth(monthKey(saved.work_date))
     else load()
@@ -234,6 +234,7 @@ export default function WorkLog({ showToast }) {
   const unbilledTotal = round2(entries.filter(e => !e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0))
 
   const preview = draft ? entryTotals(draftToRow(draft), settings) : null
+  const sameDay = draft && !draft.id ? entries.filter(e => e.work_date === draft.work_date) : []
 
   return (
     <div className="kx-wl">
@@ -361,7 +362,10 @@ export default function WorkLog({ showToast }) {
       {entries.length > 0 && (
         <div className="kx-card">
           <div className="kx-wl-invoice-head">
-            <div className="kx-card-title" style={{ margin: 0 }}>Merkinnät ({entries.length})</div>
+            <div>
+              <div className="kx-card-title" style={{ margin: 0 }}>Merkinnät ({entries.length})</div>
+              <div className="kx-main-sub">Napauta merkintää muokataksesi tai poistaaksesi sen.</div>
+            </div>
             <button className="kx-btn-ghost kx-btn-sm" onClick={downloadCSV}>⬇ Excel (CSV)</button>
           </div>
           <div className="kx-wl-list">
@@ -388,7 +392,8 @@ export default function WorkLog({ showToast }) {
                       {e.invoiced_at && <span className="kx-wl-billed">laskutettu</span>}
                     </div>
                   </button>
-                  <button className="kx-icon-btn" title="Kirjaa samanlainen päivä tänään" onClick={() => setDraft(newDraft(e))}>↻</button>
+                  <button className="kx-btn-ghost kx-btn-sm kx-wl-edit" onClick={() => editDraft(e)} aria-label="Muokkaa">✏️<span className="kx-wl-edit-label"> Muokkaa</span></button>
+                  <button className="kx-icon-btn" title="Kirjaa samanlainen päivä tänään" aria-label="Kirjaa samanlainen päivä tänään" onClick={() => setDraft(newDraft(e))}>↻</button>
                 </div>
               )
             })}
@@ -432,6 +437,17 @@ export default function WorkLog({ showToast }) {
               <div className="kx-modal-title">{draft.id ? 'Muokkaa työpäivää' : 'Kirjaa työpäivä'}</div>
               <button className="kx-icon-btn" onClick={() => setDraft(null)} aria-label="Sulje">✕</button>
             </div>
+            {!draft.id && sameDay.length > 0 && (
+              <div className="kx-wl-sameday">
+                <div>Päivälle {fmtDate(draft.work_date)} on jo kirjattu:</div>
+                {sameDay.map(e => (
+                  <div key={e.id} className="kx-wl-sameday-row">
+                    <span>{e.client_name}{e.site ? `, ${e.site}` : ''} · {e.kind === 'urakka' ? 'urakka' : `${fmtNum(e.hours)} h`} · {fmtEur(entryTotals(e, settings).total)}</span>
+                    <button className="kx-btn-ghost kx-btn-sm" onClick={() => editDraft(e)}>✏️ Muokkaa tätä</button>
+                  </div>
+                ))}
+              </div>
+            )}
             {draft.invoiced_at && <div className="kx-wl-warn">Tämä päivä on jo merkitty laskutetuksi {fmtDate(draft.invoiced_at.slice(0, 10))}. Muutokset eivät päivity lähetettyyn laskuun.</div>}
 
             <div className="kx-wl-grid">
@@ -559,7 +575,7 @@ export default function WorkLog({ showToast }) {
             <div className="kx-modal-actions">
               {draft.id && <button className="kx-btn-ghost" style={{ marginRight: 'auto', color: '#b91c1c' }} onClick={() => archive(draft)}>🗑 Poista</button>}
               <button className="kx-btn-ghost" disabled={saving} onClick={() => setDraft(null)}>Peruuta</button>
-              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? 'Tallenna muutokset' : fromField ? 'Kirjaa ja palaa tarkastukseen' : 'Kirjaa työpäivä'}</button>
+              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? (fromField ? 'Tallenna ja palaa' : 'Tallenna muutokset') : fromField ? 'Kirjaa ja palaa tarkastukseen' : 'Kirjaa työpäivä'}</button>
             </div>
           </div>
         </div>
@@ -615,6 +631,8 @@ export const WORKLOG_CSS = `
 .kx-wl-overlay { position: fixed; inset: 0; background: rgba(10,20,40,.55); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; overflow-y: auto; }
 .kx-wl-modal { background: #fff; border-radius: 18px; padding: 22px; width: 100%; max-width: 620px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 30px 80px rgba(0,0,0,.35); margin: auto 0; }
 .kx-wl-modal-head { display: flex; justify-content: space-between; align-items: center; }
+.kx-wl-sameday { background: #eef5ff; border: 1px solid #cfe3fb; color: #0a3d7a; border-radius: 10px; padding: 10px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.kx-wl-sameday-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
 .kx-wl-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 10px; padding: 9px 12px; font-size: 13px; }
 .kx-wl-seg { display: flex; background: #f1f4f9; border-radius: 11px; padding: 3px; gap: 2px; }
 .kx-wl-seg button { flex: 1; background: none; border: none; padding: 9px 6px; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: #64748b; cursor: pointer; font-family: inherit; }
@@ -640,7 +658,11 @@ export const WORKLOG_CSS = `
   .kx-wl-line-calc { grid-column: 1 / -1; margin-top: -2px; }
   .kx-wl-overlay { padding: 0; }
   .kx-wl-modal { border-radius: 0; min-height: 100%; padding: max(env(safe-area-inset-top), 16px) 16px 24px; }
-  .kx-wl-date { flex-basis: 52px; }
+  .kx-wl-date { flex-basis: 44px; font-size: 12px; }
+  .kx-wl-row { gap: 2px; }
+  .kx-wl-row-main { gap: 8px; padding: 10px 2px; }
+  .kx-wl-edit { padding: 6px 8px; }
+  .kx-wl-edit-label { display: none; }
   .kx-wl-line-head { display: none; }
   .kx-wl-table-wide { min-width: 560px; }
   .kx-wl-modal .kx-input { font-size: 16px; } /* iOS ei zoomaa kenttään */
