@@ -597,6 +597,8 @@ export default function App({ profile, logout }) {
         {menuOpen && (
           <div style={{ position: 'absolute', right: 12, top: '100%', marginTop: 4, background: '#fff', border: '1px solid #e3e8ef', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.15)', minWidth: 200, overflow: 'hidden' }}>
             <div style={{ padding: '10px 14px', fontSize: 12, color: '#64748b', borderBottom: '1px solid #f1f4f9' }}>{profile?.email}</div>
+            <a href="/?valvomo&tyoajat&uusi" style={menuItem}>⏱ Kirjaa työpäivä</a>
+            <a href="/?valvomo&tyoajat" style={menuItem}>🧾 Työajat & laskutus</a>
             <a href="/?valvomo" style={menuItem}>🖥 Valvomo & asiakkaat</a>
             <button onClick={logout} style={{ ...menuItem, width: '100%', textAlign: 'left', background: 'none', border: 'none' }}>⎋ Kirjaudu ulos</button>
           </div>

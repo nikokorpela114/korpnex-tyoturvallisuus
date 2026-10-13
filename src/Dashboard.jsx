@@ -10,6 +10,7 @@ import { ObsCard, AckAction, ReviewAction, Lightbox, StatusTag, overdue, OBS_REV
 import { usePhotoUrls, photoAsDataUrl } from './photos.js'
 import ContractorsPanel, { CONTRACTORS_CSS } from './Contractors.jsx'
 import { buildFinalReportPDF, buildObservationsCSV } from './finalReport.js'
+import WorkLog, { WORKLOG_CSS } from './WorkLog.jsx'
 
 // Valvomo (?valvomo) — Korpnexin hallintapaneeli, tarkoitettu käytettäväksi
 // tietokoneella. Täältä hallitaan työmaita (lisäys / nimeäminen / arkistointi),
@@ -30,7 +31,9 @@ import { buildFinalReportPDF, buildObservationsCSV } from './finalReport.js'
 // Kuvat tulevat Storagesta (ks. photos.js).
 export default function Dashboard({ profile, logout }) {
   const isC = profile?.role === 'konsultti'
-  const [view, setView] = useState('tyomaat') // tyomaat | tarkastus | asiakkaat (konsultti)
+  // tyomaat | tarkastus | asiakkaat | tyoajat (konsultti). ?tyoajat avaa suoraan Työajat.
+  const [view, setView] = useState(() =>
+    profile?.role === 'konsultti' && new URLSearchParams(window.location.search).has('tyoajat') ? 'tyoajat' : 'tyomaat')
   const [clients, setClients] = useState([])
   const [reviewList, setReviewList] = useState([])
   const [lightbox, setLightbox] = useState(null)
@@ -528,7 +531,7 @@ export default function Dashboard({ profile, logout }) {
 
   return (
     <div className="kx-dashboard">
-      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS + CONTRACTORS_CSS}</style>
+      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS + CONTRACTORS_CSS + WORKLOG_CSS}</style>
 
       {/* Topbar */}
       <div className="kx-topbar">
@@ -546,6 +549,7 @@ export default function Dashboard({ profile, logout }) {
                 Odottaa tarkastusta{reviewList.length > 0 && <span className="kx-count-pill">{reviewList.length}</span>}
               </button>
               <button className={view === 'asiakkaat' ? 'active' : ''} onClick={() => setView('asiakkaat')}>Asiakkaat</button>
+              <button className={view === 'tyoajat' ? 'active' : ''} onClick={() => setView('tyoajat')}>Työajat</button>
             </div>
           )}
           {isC && <a className="kx-btn-ghost kx-btn-sm kx-btn-onbrand kx-hide-mobile" href="/">📱 Kenttäsovellus</a>}
@@ -558,6 +562,14 @@ export default function Dashboard({ profile, logout }) {
         <div className="kx-shell kx-shell-single">
           <main className="kx-main">
             <ClientsPanel showToast={showToast} onSitesChanged={() => { loadWorksites(); loadClients() }} />
+          </main>
+        </div>
+      )}
+
+      {isC && view === 'tyoajat' && (
+        <div className="kx-shell kx-shell-single">
+          <main className="kx-main">
+            <WorkLog showToast={showToast} />
           </main>
         </div>
       )}
