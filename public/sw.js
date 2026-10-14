@@ -2,7 +2,7 @@
 // jotta sovellus (ja PDF-vientikirjasto) toimii huonolla/olemattomalla
 // kuuluvuudella työmaalla, kunhan sivu on ladattu kertaalleen netissä.
 
-const CACHE_VERSION = 'v8'
+const CACHE_VERSION = 'v9'
 const CACHE_NAME = `korpnex-tyoturvallisuus-${CACHE_VERSION}`
 
 self.addEventListener('install', () => {
