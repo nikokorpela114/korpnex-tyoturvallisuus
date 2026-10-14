@@ -39,7 +39,7 @@ export function saveSettings(s) {
 export const KIND_LABELS = { tunti: 'Tuntityö', urakka: 'Urakka', konsultointi: 'Konsultointi' }
 export const PER_DIEM_LABELS = { ei: 'Ei päivärahaa', osa: 'Osapäiväraha', koko: 'Kokopäiväraha' }
 export const UNITS = ['m', 'm²', 'kpl', 'h']
-export const MATERIAL_UNITS = ['putki', 'kpl', 'm', 'rll', 'l', 'kg', 'pss']
+export const MATERIAL_UNITS = ['paketti', 'kpl', 'm', 'rll', 'l', 'kg', 'pss']
 
 export function materialsTotal(e) {
   let t = 0
