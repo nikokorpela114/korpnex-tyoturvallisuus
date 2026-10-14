@@ -26,7 +26,7 @@ const todayISO = () => {
 }
 const str = v => (v === null || v === undefined ? '' : String(v).replace('.', ','))
 const emptyLine = () => ({ tyolaji: '', maara: '', yksikko: 'm', tes: '' })
-const emptyMaterial = () => ({ nimi: '', maara: '', yksikko: 'paketti', hinta: '' })
+const emptyMaterial = () => ({ nimi: '', maara: '', yksikko: 'paketti' })
 const MATERIAALIT = ['Silikoni', 'Elastinen saumausmassa', 'Akryylimassa', 'Pohjanauha', 'Primer', 'Puhdistusaine', 'Maalarinteippi']
 
 async function copyText(text) {
@@ -120,7 +120,7 @@ export default function WorkLog({ showToast }) {
       travel_rate: str(base?.travel_rate || 0),
       per_diem: base?.per_diem ?? 'ei',
       // Toistossa materiaalit tulevat valmiiksi, määrät kirjataan uudelleen
-      materials: (base?.materials || []).map(m => ({ ...m, maara: '', hinta: str(m.hinta || '') })),
+      materials: (base?.materials || []).map(m => ({ nimi: m.nimi, yksikko: m.yksikko, maara: '' })),
       notes: '',
     }
   }
@@ -130,7 +130,7 @@ export default function WorkLog({ showToast }) {
       hours: str(e.hours), hourly_rate: str(e.hourly_rate), multiplier: str(e.multiplier),
       km: str(e.km || ''), km_rate: str(e.km_rate), travel_hours: str(e.travel_hours || ''), travel_rate: str(e.travel_rate),
       lines: e.lines?.length ? e.lines.map(l => ({ ...l, maara: str(l.maara), tes: str(l.tes) })) : [emptyLine()],
-      materials: (e.materials || []).map(m => ({ ...m, maara: str(m.maara), hinta: str(m.hinta || '') })),
+      materials: (e.materials || []).map(m => ({ nimi: m.nimi, yksikko: m.yksikko, maara: str(m.maara) })),
       notes: e.notes || '',
     })
   }
@@ -172,7 +172,7 @@ export default function WorkLog({ showToast }) {
         : [],
       multiplier: num(d.multiplier) || DEFAULT_SETTINGS.multiplier,
       materials: (d.materials || []).filter(m => (m.nimi || '').trim() && num(m.maara))
-        .map(m => ({ nimi: m.nimi.trim(), maara: num(m.maara), yksikko: m.yksikko || 'kpl', hinta: num(m.hinta) })),
+        .map(m => ({ nimi: m.nimi.trim(), maara: num(m.maara), yksikko: m.yksikko || 'kpl' })),
       km: num(d.km),
       km_billable: !!d.km_billable,
       km_rate: num(d.km_rate),
@@ -332,6 +332,17 @@ export default function WorkLog({ showToast }) {
                 {cls === 'kaannetty' && <div className="kx-hint">Laskulle: ALV 0 %, merkintä "Käännetty verovelvollisuus, AVL 8 c §" ja asiakkaan Y-tunnus.</div>}
               </div>
             ))}
+            {inv.materials && (
+              <div className="kx-wl-group">
+                <div className="kx-wl-group-title">Käytetyt materiaalit (tilaajan omat, ei laskuteta)</div>
+                <div className="kx-wl-matlist">
+                  {inv.materials.map((r, i) => (
+                    <div key={i}><span>{r.name}{inv.materials.some(x => x.site !== r.site) ? ` · ${r.site}` : ''}</span><b>{fmtNum(r.qty)} {r.unit}</b></div>
+                  ))}
+                </div>
+                <div className="kx-hint">Mukana kopioiduissa laskuriveissä, jotta tilaaja voi laskuttaa materiaalit eteenpäin.</div>
+              </div>
+            )}
           </div>
         )
       })}
@@ -376,20 +387,19 @@ export default function WorkLog({ showToast }) {
           <div className="kx-wl-invoice-head">
             <div>
               <div className="kx-card-title" style={{ margin: 0 }}>Materiaalit</div>
-              <div className="kx-main-sub">Kuukauden kulutus työmaittain</div>
+              <div className="kx-main-sub">Tilaajan tuotteet, kulutus työmaittain. Näkyvät laskulla tiedoksi.</div>
             </div>
             <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(materialUsageText(usage)) ? '✓ Materiaalilista kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 Kopioi</button>
           </div>
           <div className="kx-table-wrap">
             <table className="kx-wl-table">
-              <thead><tr><th>Työmaa</th><th>Materiaali</th><th className="num">Määrä</th><th className="num">Laskutetaan</th></tr></thead>
+              <thead><tr><th>Työmaa</th><th>Materiaali</th><th className="num">Määrä</th></tr></thead>
               <tbody>
                 {usage.map((r, i) => (
                   <tr key={i}>
                     <td>{i === 0 || usage[i - 1].site !== r.site ? r.site : ''}</td>
                     <td>{r.name}</td>
                     <td className="num">{fmtNum(r.qty)} {r.unit}</td>
-                    <td className="num">{r.billed ? fmtEur(r.billed) : '–'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -562,11 +572,10 @@ export default function WorkLog({ showToast }) {
               <datalist id="kx-wl-materiaalit">{[...new Set([...MATERIAALIT, ...materialNames])].map(t => <option key={t} value={t} />)}</datalist>
               {draft.materials.length > 0 && (
                 <div className="kx-wl-line kx-wl-mat kx-wl-line-head" aria-hidden="true">
-                  <span className="kx-wl-line-name">Materiaali</span><span>Määrä</span><span>Yks.</span><span>€/yks.</span><span>Laskutus</span>
+                  <span className="kx-wl-line-name">Materiaali</span><span>Määrä</span><span>Yks.</span>
                 </div>
               )}
               {draft.materials.map((m, i) => {
-                const sum = round2(num(m.maara) * num(m.hinta))
                 return (
                   <div key={i} className="kx-wl-line kx-wl-mat">
                     <input className="kx-input kx-input-sm kx-wl-line-name" list="kx-wl-materiaalit" placeholder="Materiaali" value={m.nimi} onChange={e => setMat(i, 'nimi', e.target.value)} />
@@ -575,8 +584,6 @@ export default function WorkLog({ showToast }) {
                       {/* Vanhoilla riveillä voi olla yksikkö, jota listassa ei enää ole (esim. "putki") */}
                       {(MATERIAL_UNITS.includes(m.yksikko) ? MATERIAL_UNITS : [m.yksikko, ...MATERIAL_UNITS]).map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
-                    <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="€/yks." aria-label="Hinta asiakkaalle €/yksikkö, tyhjä = ei laskuteta" value={m.hinta} onChange={e => setMat(i, 'hinta', e.target.value)} />
-                    <div className="kx-wl-line-calc">{sum ? fmtEur(sum) : 'vain seuranta'}</div>
                     <button className="kx-icon-btn" aria-label="Poista materiaali" onClick={() => setD('materials', draft.materials.filter((_, j) => j !== i))}>✕</button>
                   </div>
                 )
@@ -584,7 +591,7 @@ export default function WorkLog({ showToast }) {
               <div className="kx-wl-lines-foot">
                 <button className="kx-btn-ghost kx-btn-sm" onClick={() => setD('materials', [...draft.materials, emptyMaterial()])}>＋ Materiaali</button>
               </div>
-              {draft.materials.length > 0 && <div className="kx-hint">Jätä €/yks. tyhjäksi, jos materiaali tulee tilaajalta. Silloin kulutus vain kirjataan eikä laskuteta.</div>}
+              {draft.materials.length > 0 && <div className="kx-hint">Tilaajan omat tuotteet. Kulutus näkyy laskulla tiedoksi, mutta niitä ei laskuteta.</div>}
             </div>
 
             <div className="kx-wl-section-title">Matkat</div>
@@ -633,7 +640,7 @@ export default function WorkLog({ showToast }) {
               <div>
                 <div className="kx-wl-preview-label">Asiakkaalle alv 0</div>
                 <div className="kx-wl-preview-sum">{fmtEur(preview.total)}</div>
-                <div className="kx-wl-period">työ {fmtEur(preview.work)}{preview.materials ? ` + materiaalit ${fmtEur(preview.materials)}` : ''}{preview.travel ? ` + matkat ${fmtEur(preview.travel)}` : ''}</div>
+                <div className="kx-wl-period">työ {fmtEur(preview.work)}{preview.travel ? ` + matkat ${fmtEur(preview.travel)}` : ''}</div>
               </div>
               {(preview.ownKm > 0 || preview.perDiem > 0) && (
                 <div style={{ textAlign: 'right' }}>
@@ -677,6 +684,9 @@ export const WORKLOG_CSS = `
 .kx-wl-table .num { text-align: right; white-space: nowrap; }
 .kx-wl-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
 .kx-wl-table tfoot .kx-wl-sub td { font-weight: 500; color: #64748b; padding-top: 2px; }
+.kx-wl-matlist { display: flex; flex-direction: column; font-size: 13.5px; }
+.kx-wl-matlist > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 8px; border-bottom: 1px solid #f1f4f9; }
+.kx-wl-matlist b { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kx-wl-period { font-size: 11.5px; color: #94a3b8; margin-top: 1px; }
 .kx-wl .kx-hint { font-size: 12px; color: #64748b; margin-top: 8px; line-height: 1.5; }
 .kx-wl-list { display: flex; flex-direction: column; }
@@ -711,7 +721,8 @@ export const WORKLOG_CSS = `
 .kx-wl-section-title { font-size: 13px; font-weight: 700; color: #0a1428; margin-bottom: -4px; }
 .kx-wl-lines { display: flex; flex-direction: column; gap: 8px; }
 .kx-wl-line { display: grid; grid-template-columns: minmax(0, 2fr) 76px 64px 76px minmax(0, 1.4fr) 28px; gap: 6px; align-items: center; }
-.kx-wl-line.kx-wl-mat { grid-template-columns: minmax(0, 2fr) 70px 86px 72px minmax(0, 1.2fr) 28px; }
+.kx-wl-line.kx-wl-mat { grid-template-columns: minmax(0, 1fr) 90px 110px 28px; }
+.kx-wl-line.kx-wl-mat > .kx-icon-btn { grid-row: auto; grid-column: auto; }
 .kx-wl-line-head { font-size: 11.5px; font-weight: 600; color: #64748b; margin-bottom: -4px; }
 .kx-wl-line-head > span:last-child { grid-column: span 2; }
 .kx-wl-line-calc { font-size: 12px; color: #475569; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -725,7 +736,10 @@ export const WORKLOG_CSS = `
   .kx-wl-grid { grid-template-columns: 1fr; }
   .kx-wl-monthstats { margin-left: 0; width: 100%; }
   .kx-wl-month { min-width: 0; flex: 1; }
-  .kx-wl-line, .kx-wl-line.kx-wl-mat { grid-template-columns: 1fr 1fr 1fr 28px; }
+  .kx-wl-line { grid-template-columns: 1fr 1fr 1fr 28px; }
+  .kx-wl-line.kx-wl-mat { grid-template-columns: 1fr 1fr 28px; }
+  .kx-wl-line.kx-wl-mat .kx-wl-line-name { grid-column: 1 / -1; }
+  .kx-wl-line.kx-wl-mat + .kx-wl-line.kx-wl-mat { margin-top: 6px; }
   .kx-wl-line-name { grid-column: 1 / -1; }
   .kx-wl-line-calc { grid-column: 1 / -1; margin-top: -2px; }
   .kx-wl-line > .kx-icon-btn { grid-row: 2; grid-column: 4; }

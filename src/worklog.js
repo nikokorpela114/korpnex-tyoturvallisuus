@@ -4,7 +4,8 @@
 //   tuntityö / konsultointi  tunnit × €/h
 //   urakka                   määrä × (TES-hinta × kerroin), yksikköhinta
 //                            pyöristetään senteille kuten laskulla
-//   materiaalit              määrä × €/yks (0 €/yks = vain kulutuksen seuranta)
+//   materiaalit              EI laskuteta: tilaajan omat tuotteet, joiden kulutus
+//                            näytetään laskulla tiedoksi (tilaaja laskuttaa ne eteenpäin)
 //   matkat                   km × €/km (jos laskutetaan) + matka-aika × €/h
 //
 // ALV: tuntityö ja urakka ovat rakentamispalvelua → käännetty verovelvollisuus
@@ -41,11 +42,6 @@ export const PER_DIEM_LABELS = { ei: 'Ei päivärahaa', osa: 'Osapäiväraha', k
 export const UNITS = ['m', 'm²', 'kpl', 'h']
 export const MATERIAL_UNITS = ['paketti', 'kpl', 'm', 'rll', 'l', 'kg', 'pss']
 
-export function materialsTotal(e) {
-  let t = 0
-  for (const m of e.materials || []) t += round2(num(m.maara) * num(m.hinta))
-  return round2(t)
-}
 
 // Senttipyöristys, joka ei kompastu liukulukuihin (0,94 × 1,75 = 1,645 → 1,65)
 export function round2(n) {
@@ -73,16 +69,14 @@ export function entryTotals(e, settings = DEFAULT_SETTINGS) {
   } else {
     work = round2(num(e.hours) * num(e.hourly_rate))
   }
-  const materials = materialsTotal(e)
   const kmBill = e.km_billable ? round2(num(e.km) * num(e.km_rate)) : 0
   const travelTime = round2(num(e.travel_hours) * num(e.travel_rate))
   const perDiem = e.per_diem === 'koko' ? num(settings.pdFull) : e.per_diem === 'osa' ? num(settings.pdPart) : 0
   const ownKm = round2(num(e.km) * num(settings.ownKmRate))
   return {
     work: round2(work),
-    materials,
     travel: round2(kmBill + travelTime),
-    total: round2(work + materials + kmBill + travelTime),
+    total: round2(work + kmBill + travelTime),
     perDiem,
     ownKm,
   }
@@ -144,12 +138,6 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
       const label = e.kind === 'konsultointi' ? 'Työturvallisuuskonsultointi' : 'Tuntityö'
       add(cls, `h|${e.kind}|${num(e.hourly_rate)}|${site}`, { desc: `${label}${where}`, unit: 'h', price: num(e.hourly_rate), addQty: num(e.hours) }).entries.push(e)
     }
-    for (const m of e.materials || []) {
-      const q = num(m.maara), price = num(m.hinta)
-      if (!q || !price) continue
-      const name = (m.nimi || 'Materiaali').trim()
-      add(cls, `m|${name}|${m.yksikko}|${price}|${site}`, { desc: `${name}${where}`, unit: m.yksikko || 'kpl', price, addQty: q, mat: true }).entries.push(e)
-    }
     if (e.km_billable && num(e.km) && num(e.km_rate)) {
       add(cls, `km|${num(e.km_rate)}`, { desc: 'Matkakulut', unit: 'km', price: num(e.km_rate), addQty: num(e.km) }).entries.push(e)
     }
@@ -159,7 +147,7 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
   }
   const out = {}
   for (const cls of ['kaannetty', 'alv']) {
-    const order = k => k.desc === 'Matkakulut' ? 2 : k.desc === 'Matka-aika' ? 3 : k.mat ? 1 : 0
+    const order = k => k.desc === 'Matkakulut' ? 1 : k.desc === 'Matka-aika' ? 2 : 0
     const lines = [...groups[cls].values()].sort((a, b) => order(a) - order(b)).map(l => {
       const ents = [...new Set(l.entries)]
       return { desc: l.desc, unit: l.unit, price: l.price, qty: l.qty, total: round2(l.qty * l.price), period: periodText(ents) }
@@ -169,6 +157,8 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
     const vat = cls === 'alv' ? round2(net * num(settings.vatPct) / 100) : 0
     out[cls] = { lines, net, vat, gross: round2(net + vat) }
   }
+  const usage = buildMaterialUsage(entries)
+  if (usage.length) out.materials = usage
   return out
 }
 
@@ -187,6 +177,15 @@ export function invoiceText(clientName, invoice, settings = DEFAULT_SETTINGS) {
     if (cls === 'kaannetty') rows.push('Käännetty verovelvollisuus, AVL 8 c §')
     else rows.push(`ALV ${fmtNum(settings.vatPct, 1)} %: ${fmtEur(g.vat)} · Yhteensä: ${fmtEur(g.gross)}`)
   }
+  if (invoice.materials?.length) {
+    rows.push('')
+    rows.push('Käytetyt materiaalit (tilaajan omat, ei laskuteta):')
+    let site = null
+    for (const r of invoice.materials) {
+      if (r.site !== site) { site = r.site; rows.push(`${site}:`) }
+      rows.push(`- ${r.name} ${fmtNum(r.qty)} ${r.unit}`)
+    }
+  }
   return rows.join('\n')
 }
 
@@ -200,9 +199,8 @@ export function buildMaterialUsage(entries) {
       const name = (x.nimi || 'Materiaali').trim()
       const site = (e.site || '').trim() || e.client_name
       const key = `${site}|${name.toLowerCase()}|${x.yksikko}`
-      const cur = m.get(key) || { site, name, unit: x.yksikko || 'kpl', qty: 0, billed: 0 }
+      const cur = m.get(key) || { site, name, unit: x.yksikko || 'kpl', qty: 0 }
       cur.qty = round2(cur.qty + q)
-      cur.billed = round2(cur.billed + round2(q * num(x.hinta)))
       m.set(key, cur)
     }
   }
@@ -214,7 +212,7 @@ export function materialUsageText(rows) {
   let site = null
   for (const r of rows) {
     if (r.site !== site) { site = r.site; out.push(''); out.push(site) }
-    out.push(`${r.name}: ${fmtNum(r.qty)} ${r.unit}${r.billed ? ` (laskutetaan ${fmtEur(r.billed)})` : ''}`)
+    out.push(`${r.name}: ${fmtNum(r.qty)} ${r.unit}`)
   }
   return out.join('\n')
 }
@@ -255,7 +253,7 @@ export function entriesCSV(entries, settings = DEFAULT_SETTINGS) {
     return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
   const n = v => String(round2(v)).replace('.', ',')
-  const head = ['Päivä', 'Asiakas', 'Työmaa', 'Tyyppi', 'Tunnit', '€/h', 'Urakkarivit', 'Työ €', 'Materiaalit', 'Materiaalit €', 'Km', 'Km laskutetaan', 'Matkat €', 'Yhteensä alv 0 €', 'Päiväraha', 'Päiväraha €', 'Laskutettu', 'Lisätieto']
+  const head = ['Päivä', 'Asiakas', 'Työmaa', 'Tyyppi', 'Tunnit', '€/h', 'Urakkarivit', 'Työ €', 'Materiaalit (tilaajan)', 'Km', 'Km laskutetaan', 'Matkat €', 'Yhteensä alv 0 €', 'Päiväraha', 'Päiväraha €', 'Laskutettu', 'Lisätieto']
   const rows = entries.map(e => {
     const t = entryTotals(e, settings)
     const lines = e.kind === 'urakka'
@@ -263,8 +261,8 @@ export function entriesCSV(entries, settings = DEFAULT_SETTINGS) {
       : ''
     return [fmtDate(e.work_date), e.client_name, e.site, KIND_LABELS[e.kind], e.kind === 'urakka' ? '' : n(e.hours), e.kind === 'urakka' ? '' : n(e.hourly_rate),
       lines, n(t.work),
-      (e.materials || []).map(m => `${m.nimi} ${fmtNum(num(m.maara))} ${m.yksikko}${num(m.hinta) ? ` × ${n(m.hinta)}` : ''}`).join(' | '),
-      n(t.materials), n(e.km), e.km_billable ? 'kyllä' : 'ei', n(t.travel), n(t.total), PER_DIEM_LABELS[e.per_diem], n(t.perDiem),
+      (e.materials || []).map(m => `${m.nimi} ${fmtNum(num(m.maara))} ${m.yksikko}`).join(' | '),
+      n(e.km), e.km_billable ? 'kyllä' : 'ei', n(t.travel), n(t.total), PER_DIEM_LABELS[e.per_diem], n(t.perDiem),
       e.invoiced_at ? fmtDate(e.invoiced_at.slice(0, 10)) : '', e.notes].map(esc).join(';')
   })
   return '\ufeff' + [head.join(';'), ...rows].join('\n')
