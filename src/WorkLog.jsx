@@ -15,8 +15,9 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS, KIND_LABELS, PER_DIEM_LABELS, UNITS, MATERIAL_UNITS,
   buildMaterialUsage, materialUsageText,
   num, round2, unitPrice, entryTotals, buildInvoice, invoiceText, buildTravelClaim, travelClaimText,
-  entriesCSV, monthKey, monthRange, shiftMonth, monthLabel, fmtEur, fmtNum, fmtDate,
+  monthKey, monthRange, shiftMonth, monthLabel, fmtEur, fmtNum, fmtDate,
 } from './worklog.js'
+import { downloadWorkbook } from './worklogXlsx.js'
 
 const TYOLAJIT = ['Silikonin veto', 'Elastinen saumaus', 'Akryylisaumaus', 'Pohjanauha', 'Vanhan sauman poisto', 'Ikkunan tiivistys']
 
@@ -49,6 +50,7 @@ export default function WorkLog({ showToast }) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [exporting, setExporting] = useState(false)
   // Kenttäsovelluksen "Kirjaa työpäivä" -linkki (?uusi) avaa lomakkeen heti,
   // kun edelliset merkinnät on haettu (asiakas ja km esitäytetään niistä).
   const openNewRef = useRef(new URLSearchParams(window.location.search).has('uusi'))
@@ -219,13 +221,16 @@ export default function WorkLog({ showToast }) {
     showToast('✓ Merkitty laskutetuksi'); load()
   }
 
-  function downloadCSV() {
-    const blob = new Blob([entriesCSV(entries, settings)], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `tyoajat-${month}.csv`
-    document.body.appendChild(a); a.click(); a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 2000)
+  async function downloadExcel() {
+    setExporting(true)
+    try {
+      await downloadWorkbook(entries, settings, month)
+      showToast('✓ Excel ladattu')
+    } catch (e) {
+      console.error('xlsx export failed:', e)
+      showToast('⚠ Excelin teko epäonnistui')
+    }
+    setExporting(false)
   }
 
   // --- Kuukauden yhteenvedot -------------------------------------------------
@@ -416,7 +421,7 @@ export default function WorkLog({ showToast }) {
               <div className="kx-card-title" style={{ margin: 0 }}>Merkinnät ({entries.length})</div>
               <div className="kx-main-sub">Napauta merkintää muokataksesi tai poistaaksesi sen.</div>
             </div>
-            <button className="kx-btn-ghost kx-btn-sm" onClick={downloadCSV}>⬇ Excel (CSV)</button>
+            <button className="kx-btn-ghost kx-btn-sm" onClick={downloadExcel} disabled={exporting}>{exporting ? 'Tehdään…' : '⬇ Excel'}</button>
           </div>
           <div className="kx-wl-list">
             {entries.map(e => {
