@@ -286,14 +286,71 @@ export function materialUsageText(rows) {
 }
 
 // Oma matkalasku: päivä kerrallaan, kaikilta asiakkailta
-export function buildTravelClaim(entries, settings = DEFAULT_SETTINGS) {
+// --- Ajopäiväkirja ------------------------------------------------------------
+// Erillinen ajo = valmis ajo, jota ei ole liitetty työpäivään (esim. tarvikeostokset).
+// Työpäivään liitetyn ajon km:t ovat jo työpäivän km-kentässä, joten niitä ei
+// lasketa kahteen kertaan.
+export function standaloneTrips(trips = []) {
+  return trips.filter(t => !t.archived && !t.entry_id && !isOpenTrip(t) && num(t.km) > 0)
+}
+export const isOpenTrip = t => t.odo_start != null && t.odo_end == null && !t.end_time
+export function tripRoute(homeAddress, site, fallback) {
+  const home = (homeAddress || '').trim() || 'Koti'
+  const dest = (site?.address || site?.name || fallback || '').trim()
+  return dest ? `${home} – ${dest} – ${home}` : ''
+}
+// Yhdistetty ajopäiväkirja: työpäivät km:llä + erilliset ajot + käynnissä oleva ajo.
+// Peräkkäisten mittarilukemien väli näytetään yksityisajona (ei korvauksiin).
+export function buildDriveLog(entries, trips, sites, homeAddress) {
+  const siteById = id => sites.find(x => x.id === id)
+  const byEntry = new Map(trips.filter(t => t.entry_id && !t.archived).map(t => [t.entry_id, t]))
+  const rows = []
+  for (const e of entries) {
+    const t = byEntry.get(e.id)
+    if (!(num(e.km) > 0) && !t) continue
+    const site = e.site_id && siteById(e.site_id)
+    rows.push({
+      date: e.work_date,
+      start: t?.start_time || e.depart_time || '', end: t?.end_time || e.return_time || '',
+      route: t?.route || tripRoute(homeAddress, site, e.site),
+      purpose: t?.purpose || `Työkeikka: ${e.client_name}${e.site ? `, ${e.site}` : ''}`,
+      odoStart: t?.odo_start ?? null, odoEnd: t?.odo_end ?? null,
+      km: num(e.km) || num(t?.km), source: 'tyopaiva', entryId: e.id, tripId: t?.id || null,
+      open: !!t && isOpenTrip(t),
+    })
+  }
+  for (const t of trips) {
+    if (t.archived || (t.entry_id && entries.some(e => e.id === t.entry_id))) continue
+    rows.push({
+      date: t.trip_date, start: t.start_time || '', end: t.end_time || '',
+      route: t.route || '', purpose: t.purpose || '', odoStart: t.odo_start ?? null, odoEnd: t.odo_end ?? null,
+      km: num(t.km), source: 'ajo', entryId: t.entry_id || null, tripId: t.id,
+      open: isOpenTrip(t),
+    })
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date) || String(a.start).localeCompare(String(b.start)) || (a.odoStart ?? 0) - (b.odoStart ?? 0))
+  // Yksityisajo kahden lukemallisen työajon välissä
+  let prevEnd = null
+  for (const r of rows) {
+    if (r.odoStart != null && prevEnd != null && r.odoStart > prevEnd) r.privateBefore = r.odoStart - prevEnd
+    if (r.odoEnd != null) prevEnd = r.odoEnd
+  }
+  const businessKm = round2(rows.filter(r => !r.open).reduce((s, r) => s + r.km, 0))
+  const privateKm = rows.reduce((s, r) => s + (r.privateBefore || 0), 0)
+  return { rows, businessKm, privateKm }
+}
+
+export function buildTravelClaim(entries, settings = DEFAULT_SETTINGS, trips = []) {
   const rows = entries
     .filter(e => num(e.km) > 0 || e.per_diem !== 'ei')
-    .sort((a, b) => a.work_date.localeCompare(b.work_date))
     .map(e => {
       const t = entryTotals(e, settings)
       return { date: e.work_date, client: e.client_name, site: e.site || '', km: num(e.km), kmEur: t.ownKm, perDiem: e.per_diem, pdEur: t.perDiem }
     })
+  for (const t of standaloneTrips(trips)) {
+    rows.push({ date: t.trip_date, client: t.client_name || '', site: t.purpose || t.route || 'Työajo', km: num(t.km), kmEur: round2(num(t.km) * num(settings.ownKmRate)), perDiem: 'ei', pdEur: 0 })
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date))
   const km = round2(rows.reduce((s, r) => s + r.km, 0))
   const kmEur = round2(rows.reduce((s, r) => s + r.kmEur, 0))
   const pdEur = round2(rows.reduce((s, r) => s + r.pdEur, 0))

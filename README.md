@@ -58,7 +58,12 @@ hinnat, km:t ja ALV-käsittelyn. Työaika kirjataan alku–loppu-kellonajoilla
 (tunnit pyöristetään 15 min tarkkuudella, ruokatauko −30 min napista) ja
 lähtö/paluu kotiin -ajoista sovellus ehdottaa päivärahan.
 
-Kenttäsovelluksen valikosta: ⏱ Kirjaa työpäivä / 🧾 Työajat & laskutus.
+**Ajopäiväkirja** (taulu `wl_trips`, välilehti 🚗 Ajot): 🚗 Lähden ajoon → mittarilukema,
+🏁 Ajo päättyi → loppulukema, km lasketaan ja liitetään saman päivän työpäivään.
+Erilliset ajot (esim. tarvikeostokset) menevät omaan matkalaskuun. Lukemien väli
+näytetään yksityisajona. Excel-raportissa oma Ajopäiväkirja-välilehti.
+
+Kenttäsovelluksen valikosta: 🚗 Lähden ajoon / ⏱ Kirjaa työpäivä / 🧾 Työajat & laskutus.
 Käyttöönotto: aja `supabase/tyoajat.sql` SQL Editorissa. Oletushinnat
 (30 €/h, kerroin 1,75, 0,55 €/km, päivärahat 25 / 54 €) muutetaan näkymän
 alareunasta, ja ne tallentuvat laitteelle.

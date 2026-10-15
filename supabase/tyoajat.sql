@@ -130,3 +130,42 @@ create policy "tt wl_sites own" on public.wl_sites for all
 -- Päivärahojen laskutus asiakkaalta (vain jos sovittu): asiakaskohtainen oletus + merkintäkohtainen valinta
 alter table public.wl_clients add column if not exists bill_per_diem boolean not null default false;
 alter table public.work_entries add column if not exists per_diem_billable boolean not null default false;
+
+-- ---------------------------------------------------------------------------
+-- Ajopäiväkirja: työajot mittarilukemineen. Työpäivään liitetty ajo
+-- (entry_id) päivittää työpäivän km:t; erillinen ajo (entry_id null, esim.
+-- tarvikeostokset) menee suoraan omaan matkalaskuun.
+-- ---------------------------------------------------------------------------
+create table if not exists public.wl_trips (
+  id          bigint generated always as identity primary key,
+  user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  trip_date   date not null,
+  start_time  time,
+  end_time    time,
+  odo_start   integer,      -- mittarilukema lähtiessä
+  odo_end     integer,      -- mittarilukema palatessa (tyhjä = ajo käynnissä)
+  km          numeric,      -- odo_end − odo_start, tai käsin ilman lukemia
+  route       text,
+  purpose     text,
+  site_id     bigint references public.wl_sites(id) on delete set null,
+  client_name text,
+  entry_id    bigint references public.work_entries(id) on delete set null,
+  archived    boolean not null default false,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists wl_trips_user_date_idx on public.wl_trips(user_id, trip_date);
+create index if not exists wl_trips_entry_idx on public.wl_trips(entry_id);
+
+drop trigger if exists tt_wl_trips_touch on public.wl_trips;
+create trigger tt_wl_trips_touch before update on public.wl_trips
+  for each row execute function public.tt_touch_updated_at();
+
+revoke all on public.wl_trips from anon;
+grant select, insert, update, delete on public.wl_trips to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+alter table public.wl_trips enable row level security;
+drop policy if exists "tt wl_trips own" on public.wl_trips;
+create policy "tt wl_trips own" on public.wl_trips for all
+  using ((select tt_is_consultant()) and user_id = (select auth.uid()))
+  with check ((select tt_is_consultant()) and user_id = (select auth.uid()));

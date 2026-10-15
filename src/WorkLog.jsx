@@ -20,11 +20,12 @@ import {
   buildMaterialUsage, materialUsageText,
   num, round2, unitPrice, entryTotals, buildInvoice, invoiceText, buildTravelClaim, travelClaimText,
   monthKey, monthRange, shiftMonth, monthLabel, fmtEur, fmtNum, fmtDate,
-  calcHours, suggestPerDiem, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
+  calcHours, suggestPerDiem, isOpenTrip, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
 } from './worklog.js'
 import { downloadWorkbook } from './worklogXlsx.js'
 import WorkRegistry, { ClientModal, SiteModal } from './WorkRegistry.jsx'
 import { downloadUkkoTravelClaim } from './ukkoMatkalasku.js'
+import DriveLog, { TripModal, OpenTripBanner } from './DriveLog.jsx'
 
 const TYOLAJIT = ['Silikonin veto', 'Elastinen saumaus', 'Akryylisaumaus', 'Pohjanauha', 'Vanhan sauman poisto', 'Ikkunan tiivistys']
 
@@ -73,18 +74,33 @@ export default function WorkLog({ showToast }) {
   // Kenttäsovelluksen "Kirjaa työpäivä" -linkki (?uusi) avaa lomakkeen heti,
   // kun edelliset merkinnät on haettu (asiakas ja km esitäytetään niistä).
   const openNewRef = useRef(new URLSearchParams(window.location.search).has('uusi'))
+  // ?ajo (kenttäsovelluksen valikosta): avaa ajon aloituksen tai lopetuksen
+  const openTripRef = useRef(new URLSearchParams(window.location.search).has('ajo'))
+  const [trips, setTrips] = useState([])
+  const [openTrip, setOpenTrip] = useState(null)
+  const [lastOdo, setLastOdo] = useState(null)
+  const [tripModal, setTripModal] = useState(null) // { mode, trip }
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     const { from, to } = monthRange(month)
-    const [m, r, c, st] = await Promise.all([
+    const [m, r, c, st, tr, ot, lo] = await Promise.all([
       sb.from('work_entries').select('*').eq('archived', false).gte('work_date', from).lte('work_date', to)
         .order('work_date', { ascending: false }).order('id', { ascending: false }),
       sb.from('work_entries').select('client_name, site, site_id, kind, hourly_rate, km, km_rate, km_billable, multiplier, start_time, end_time, break_minutes')
         .eq('archived', false).order('work_date', { ascending: false }).order('id', { ascending: false }).limit(300),
       sb.from('wl_clients').select('*').order('name'),
       sb.from('wl_sites').select('*').order('name'),
+      sb.from('wl_trips').select('*').eq('archived', false).gte('trip_date', from).lte('trip_date', to).order('trip_date').order('start_time'),
+      sb.from('wl_trips').select('*').eq('archived', false).not('odo_start', 'is', null).is('odo_end', null).is('end_time', null)
+        .order('trip_date', { ascending: false }).limit(1),
+      sb.from('wl_trips').select('odo_end').eq('archived', false).not('odo_end', 'is', null).order('odo_end', { ascending: false }).limit(1),
     ])
+    const monthTrips = tr.error ? [] : (tr.data || [])
+    setTrips(monthTrips)
+    const open = ot.error ? null : (ot.data?.[0] || null)
+    setOpenTrip(open)
+    setLastOdo(lo.error ? null : (lo.data?.[0]?.odo_end ?? null))
     const regClients = c.error ? [] : (c.data || [])
     const regSites = st.error ? [] : (st.data || [])
     if (!c.error) setClients(regClients)
@@ -100,9 +116,17 @@ export default function WorkLog({ showToast }) {
     setLoading(false)
     if (openNewRef.current) {
       openNewRef.current = false
-      setDraft(newDraft(null, { last: (r.data || [])[0], clients: regClients, sites: regSites }))
+      setDraft(newDraft(null, { last: (r.data || [])[0], clients: regClients, sites: regSites, trips: monthTrips }))
       const p = new URLSearchParams(window.location.search)
       p.delete('uusi')
+      const qs = p.toString().replace(/=(?=&|$)/g, '')
+      try { window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '')) } catch { /* ei väliä */ }
+    }
+    if (openTripRef.current) {
+      openTripRef.current = false
+      setTripModal(open ? { mode: 'end', trip: open } : { mode: 'start', trip: null })
+      const p = new URLSearchParams(window.location.search)
+      p.delete('ajo')
       const qs = p.toString().replace(/=(?=&|$)/g, '')
       try { window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '')) } catch { /* ei väliä */ }
     }
@@ -186,6 +210,7 @@ export default function WorkLog({ showToast }) {
     }
     if (site && !base) d = applySite(d, site, ctx)
     else if (!site && !d.client_name) d.freeText = !(ctx.sites || sites).some(x => !x.archived)
+    if (!base) d = withTrip(d, ctx)
     return withHours(d)
   }
   function editDraft(e) {
@@ -212,6 +237,18 @@ export default function WorkLog({ showToast }) {
       return withHours({ ...d, kind, hourly_rate: rate })
     })
   }
+  // Saman päivän ajopäiväkirjan ajo (ei vielä liitetty työpäivään) täyttää
+  // km:t, lähtö- ja paluuajan sekä työmaan. Tallennus liittää ajon työpäivään.
+  function withTrip(d, ctx = {}) {
+    const t = (ctx.trips || trips).find(x => x.trip_date === d.work_date && !x.entry_id && !isOpenTrip(x) && num(x.km) > 0)
+    if (!t) return d
+    let next = { ...d, _tripId: t.id, km: str(t.km), depart_time: hhmm(t.start_time) || d.depart_time, return_time: hhmm(t.end_time) || d.return_time }
+    const site = t.site_id && (ctx.sites || sites).find(x => x.id === t.site_id && !x.archived)
+    if (site && !d.site_id) next = applySite(next, site, ctx)
+    if (site) next.km = str(t.km)
+    return withPerDiem(next)
+  }
+
   // Tunnit kellonajoista (15 min pyöristys). Käsin kirjoitettu tunti-arvo säilyy,
   // kunnes kellonaikoja tai taukoa muutetaan.
   function withHours(d) {
@@ -301,6 +338,9 @@ export default function WorkLog({ showToast }) {
     showToast(draft.id ? '✓ Muutokset tallennettu' : '✓ Työpäivä kirjattu')
     if (!draft.id) changeTab('kirjaukset')
     const saved = res.data?.[0]
+    if (saved && !draft.id && draft._tripId) {
+      await sb.from('wl_trips').update({ entry_id: saved.id }).eq('id', draft._tripId)
+    }
     setDraft(null)
     if (saved && monthKey(saved.work_date) !== month) setMonth(monthKey(saved.work_date))
     else load()
@@ -340,7 +380,7 @@ export default function WorkLog({ showToast }) {
     }
     setExporting(true)
     try {
-      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, month)
+      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, month, trips)
       showToast('✓ UKKO-matkalasku ladattu')
     } catch (e) {
       console.error('ukko travel claim failed:', e)
@@ -352,7 +392,7 @@ export default function WorkLog({ showToast }) {
   async function downloadExcel() {
     setExporting(true)
     try {
-      await downloadWorkbook(entries, settings, month, clients, sites)
+      await downloadWorkbook(entries, settings, month, clients, sites, trips)
       showToast('✓ Excel ladattu')
     } catch (e) {
       console.error('xlsx export failed:', e)
@@ -373,7 +413,7 @@ export default function WorkLog({ showToast }) {
     const open = list => list.some(e => !e.invoiced_at) ? 0 : 1
     return [...m.entries()].sort((a, b) => open(a[1]) - open(b[1]) || a[0].localeCompare(b[0], 'fi'))
   }, [entries])
-  const claim = useMemo(() => buildTravelClaim(entries, settings), [entries, settings])
+  const claim = useMemo(() => buildTravelClaim(entries, settings, trips), [entries, settings, trips])
   const usage = useMemo(() => buildMaterialUsage(entries), [entries])
   const monthTotal = round2(entries.reduce((s, e) => s + entryTotals(e, settings).total, 0))
   const unbilledTotal = round2(entries.filter(e => !e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0))
@@ -388,14 +428,18 @@ export default function WorkLog({ showToast }) {
           <div className="kx-main-title">Työajat</div>
           <div className="kx-main-sub">Kirjaa työpäivät, tee laskurivit ja matkalasku. Näkyy vain sinulle.</div>
         </div>
-        <div className="kx-main-head-actions">
+        <div className="kx-main-head-actions kx-wl-headbtns">
+          {!openTrip && <button className="kx-btn-ghost" onClick={() => setTripModal({ mode: 'start', trip: null })}>🚗 Lähden ajoon</button>}
           <button className="kx-btn-primary" onClick={() => setDraft(newDraft())}>＋ Kirjaa työpäivä</button>
         </div>
       </div>
 
+      <OpenTripBanner trip={openTrip} onEnd={() => setTripModal({ mode: 'end', trip: openTrip })} />
+
       <div className="kx-wl-tabbar" role="tablist" aria-label="Työajat-näkymä">
         {[
           ['kirjaukset', '🗓', 'Kirjaukset', 'Kirjaukset'],
+          ['ajot', '🚗', 'Ajopäiväkirja', 'Ajot'],
           ['laskutus', '🧾', 'Laskutus', 'Laskutus'],
           ['rekisteri', '🏗', 'Asiakkaat & työmaat', 'Työmaat'],
           ['asetukset', '⚙', 'Asetukset', 'Asetukset'],
@@ -411,12 +455,12 @@ export default function WorkLog({ showToast }) {
         <WorkRegistry clients={clients} sites={sites} onEditClient={c => setClientEdit(c)} onEditSite={x => setSiteEdit(x)} />
       )}
 
-      {(tab === 'kirjaukset' || tab === 'laskutus') && <>
+      {(tab === 'kirjaukset' || tab === 'laskutus' || tab === 'ajot') && <>
       <div className="kx-wl-monthbar">
         <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, -1))} aria-label="Edellinen kuukausi">‹</button>
         <div className="kx-wl-month">{monthLabel(month)}</div>
         <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, 1))} aria-label="Seuraava kuukausi">›</button>
-        <div className="kx-wl-monthstats" style={tab === 'kirjaukset' ? { display: 'none' } : undefined}>
+        <div className="kx-wl-monthstats" style={tab !== 'laskutus' ? { display: 'none' } : undefined}>
           <span><b>{fmtEur(monthTotal)}</b> kuukaudessa</span>
           {unbilledTotal > 0 && unbilledTotal !== monthTotal && <span className="kx-wl-due">{fmtEur(unbilledTotal)} laskuttamatta</span>}
         </div>
@@ -425,11 +469,25 @@ export default function WorkLog({ showToast }) {
       {err && <div className="kx-error">{err}</div>}
       {loading && !entries.length && <div className="kx-empty-note">Ladataan…</div>}
 
-      {!loading && !err && entries.length === 0 && (
+      {!loading && !err && entries.length === 0 && tab !== 'ajot' && (
         <div className="kx-empty-note">
           Ei {tab === 'laskutus' ? 'laskutettavaa' : 'merkintöjä'} kuukaudelle {monthLabel(month).toLowerCase()}.<br />
           <button className="kx-btn-primary" style={{ marginTop: 12 }} onClick={() => setDraft(newDraft())}>＋ Kirjaa ensimmäinen työpäivä</button>
         </div>
+      )}
+
+      {tab === 'ajot' && (
+        <DriveLog
+          entries={entries} trips={trips} sites={sites} settings={settings}
+          openTrip={openTrip} exporting={exporting} onExcel={downloadExcel}
+          onStartTrip={() => setTripModal({ mode: 'start', trip: null })}
+          onNewTrip={() => setTripModal({ mode: 'new', trip: null })}
+          onEditTrip={r => {
+            const t = r.tripId && trips.find(x => x.id === r.tripId)
+            if (t) setTripModal({ mode: isOpenTrip(t) ? 'end' : 'edit', trip: t })
+            else { const e = entries.find(x => x.id === r.entryId); if (e) editDraft(e) }
+          }}
+        />
       )}
 
       {tab === 'laskutus' && entries.length > 0 && (
@@ -942,6 +1000,15 @@ export default function WorkLog({ showToast }) {
           </div>
         </div>
       )}
+      {tripModal && (
+        <TripModal
+          mode={tripModal.mode} trip={tripModal.trip} sites={sites} clients={clients} settings={settings}
+          lastOdo={lastOdo} showToast={showToast}
+          onClose={() => setTripModal(null)}
+          onSaved={() => { setTripModal(null); load() }}
+        />
+      )}
+
       {/* Rekisterilomakkeet (pinoutuvat työpäivälomakkeen päälle) */}
       {siteEdit && (
         <SiteModal
@@ -1008,6 +1075,11 @@ export const WORKLOG_CSS = `
 .kx-wl-tabbar button { display: inline-flex; align-items: center; gap: 7px; background: none; border: none; border-bottom: 2.5px solid transparent; padding: 10px 14px 11px; font-size: 14px; font-weight: 700; color: #64748b; cursor: pointer; font-family: inherit; white-space: nowrap; margin-bottom: -1px; }
 .kx-wl-tabbar button:hover:not(.active) { color: #0a1428; }
 .kx-wl-tabshort { display: none; }
+.kx-wl-headbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.kx-wl-tripbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46; border-radius: 14px; padding: 12px 16px; font-size: 13.5px; }
+.kx-wl-tripbar b { font-size: 14.5px; }
+.kx-wl-private { font-size: 12px; color: #94a3b8; font-style: italic; text-align: center; padding: 5px 0; border-bottom: 1px solid #f1f4f9; background: repeating-linear-gradient(135deg, transparent 0 6px, #f8fafc 6px 12px); }
+.kx-wl-odo { font-size: 18px !important; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
 .kx-wl-tabbar button.active { color: #0878E8; border-bottom-color: #0878E8; }
 .kx-wl-tabbar button:focus-visible { outline: 2px solid #0878E8; outline-offset: -2px; border-radius: 6px; }
 .kx-wl-reports { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: linear-gradient(135deg, #eef5ff, #fff); border-color: #cfe3fb; }
@@ -1102,6 +1174,9 @@ export const WORKLOG_CSS = `
   .kx-wl-timerow { grid-template-columns: 1fr 1fr; }
   .kx-wl-break { grid-column: 1 / -1; }
   .kx-wl-stats { grid-template-columns: 1fr 1fr; }
+  .kx-wl-headbtns { width: 100%; }
+  .kx-wl-headbtns > button { flex: 1; }
+  .kx-wl-tripbar > button { width: 100%; }
   .kx-wl-tabbar { gap: 0; }
   .kx-wl-tabbar button { flex: 1; flex-direction: column; gap: 2px; padding: 8px 2px 9px; font-size: 12px; }
   .kx-wl-tabicon { font-size: 17px; }

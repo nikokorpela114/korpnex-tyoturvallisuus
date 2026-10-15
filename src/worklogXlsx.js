@@ -9,7 +9,7 @@
 // päivittyvät, jos riviä muokataan Excelissä.
 import {
   KIND_LABELS, PER_DIEM_LABELS, num, round2, unitPrice, entryTotals,
-  buildInvoice, buildTravelClaim, buildMaterialUsage, monthLabel, fmtTime, clientInfoLines,
+  buildInvoice, buildTravelClaim, buildMaterialUsage, monthLabel, fmtTime, clientInfoLines, buildDriveLog,
 } from './worklog.js'
 
 const NAVY = 'FF0A1428'
@@ -72,7 +72,7 @@ function totalRow(row, cols) {
 const sumF = (col, from, to) => `SUM(${col}${from}:${col}${to})`
 const colL = n => String.fromCharCode(64 + n)
 
-export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], sites = []) {
+export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], sites = [], trips = []) {
   const clientFor = (name, list) => {
     const sid = list.find(e => e.site_id)?.site_id
     const site = sites.find(x => x.id === sid)
@@ -270,7 +270,7 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
 
   // ---- 3) Matkalasku ---------------------------------------------------------
   {
-    const claim = buildTravelClaim(sorted, settings)
+    const claim = buildTravelClaim(sorted, settings, trips)
     const ws = wb.addWorksheet('Matkalasku')
     const cols = [['Päivä', 11], ['Kohde', 30], ['Asiakas', 18], ['Km', 8], ['Km-korvaus', 12], ['Päiväraha', 16], ['Päiväraha €', 12], ['Yhteensä', 12]]
     cols.forEach(([, w], i) => { ws.getColumn(i + 1).width = w })
@@ -313,7 +313,50 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
     styleSheet(ws)
   }
 
-  // ---- 4) Materiaalit --------------------------------------------------------
+  // ---- 4) Ajopäiväkirja -----------------------------------------------------
+  {
+    const log = buildDriveLog(sorted, trips, sites, settings.homeAddress)
+    const ws = wb.addWorksheet('Ajopäiväkirja', { views: [{ state: 'frozen', ySplit: 4 }] })
+    const cols = [['Päivä', 11], ['Lähtö', 7], ['Paluu', 7], ['Mittari alussa', 12], ['Mittari lopussa', 12], ['Km', 8], ['Reitti', 46], ['Tarkoitus', 40], ['Tyyppi', 13]]
+    cols.forEach(([, w], i) => { ws.getColumn(i + 1).width = w })
+    title(ws, `Ajopäiväkirja · ${mLabel}`, `Työajot omalla autolla${settings.vehicle ? ` (${settings.vehicle})` : ''}${settings.travelName ? ` · ${settings.travelName}` : ''}`, cols.length)
+    header(ws, 4, cols.map(c => c[0]))
+    let r = 5, i = 0
+    const first = r
+    for (const x of log.rows.filter(x => !x.open)) {
+      if (x.privateBefore > 0) {
+        ws.mergeCells(r, 1, r, cols.length)
+        ws.getCell(r, 1).value = `Yksityisajoa välissä ${x.privateBefore} km (ei korvauksiin)`
+        ws.getCell(r, 1).font = { name: FONT, size: 9, italic: true, color: { argb: 'FF94A3B8' } }
+        r += 1
+      }
+      const row = ws.getRow(r)
+      row.getCell(1).value = d(x.date); row.getCell(1).numFmt = 'd.m.yyyy'
+      row.getCell(2).value = fmtTime(x.start)
+      row.getCell(3).value = fmtTime(x.end)
+      row.getCell(4).value = x.odoStart ?? null; row.getCell(4).numFmt = '#,##0'
+      row.getCell(5).value = x.odoEnd ?? null; row.getCell(5).numFmt = '#,##0'
+      row.getCell(6).value = x.odoStart != null && x.odoEnd != null ? { formula: `E${r}-D${r}`, result: x.km } : x.km
+      row.getCell(6).numFmt = NUM
+      row.getCell(7).value = x.route
+      row.getCell(8).value = x.purpose
+      row.getCell(9).value = x.source === 'ajo' ? 'Erillinen ajo' : 'Työpäivä'
+      zebra(row, i++, cols.length)
+      r += 1
+    }
+    const tr = ws.getRow(r)
+    tr.getCell(1).value = 'Työajoa yhteensä'
+    tr.getCell(6).value = { formula: `SUM(F${first}:F${Math.max(first, r - 1)})`, result: log.businessKm }
+    tr.getCell(6).numFmt = NUM
+    totalRow(tr, cols.length)
+    if (log.privateKm) {
+      ws.getCell(r + 1, 1).value = `Yksityisajoa työajojen välissä yhteensä ${log.privateKm} km (ei korvauksiin)`
+      ws.getCell(r + 1, 1).font = { name: FONT, size: 9, italic: true, color: { argb: 'FF64748B' } }
+    }
+    styleSheet(ws)
+  }
+
+  // ---- 5) Materiaalit --------------------------------------------------------
   {
     const usage = buildMaterialUsage(sorted)
     const ws = wb.addWorksheet('Materiaalit')
@@ -338,10 +381,10 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
 }
 
 // Selaimessa: ExcelJS ladataan vasta kun nappia painetaan (ei kasvata sovellusta)
-export async function downloadWorkbook(entries, settings, month, clients = [], sites = []) {
+export async function downloadWorkbook(entries, settings, month, clients = [], sites = [], trips = []) {
   const mod = await import('exceljs/dist/exceljs.min.js')
   const ExcelJS = mod.default || mod
-  const wb = buildWorkbook(ExcelJS, entries, settings, month, clients, sites)
+  const wb = buildWorkbook(ExcelJS, entries, settings, month, clients, sites, trips)
   const buf = await wb.xlsx.writeBuffer()
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)

@@ -5,7 +5,7 @@
 // Jos rivejä on enemmän kuin pohjassa, lisätään rivejä ja kirjoitetaan
 // kaikki pohjan kaavat ja yhdistetyt solut uudelleen oikeille riveille,
 // koska ExcelJS ei siirrä niitä itse.
-import { num, round2, DEFAULT_SETTINGS } from './worklog.js'
+import { num, round2, DEFAULT_SETTINGS, standaloneTrips } from './worklog.js'
 
 const TEMPLATE_URL = '/ukko-matkalasku-2026.xlsx'
 // Pohjan rakenne (rivinumerot alkuperäisessä tiedostossa)
@@ -19,7 +19,7 @@ const ddmmyyyy = iso => { const [y, m, d] = iso.slice(0, 10).split('-'); return 
 const dt = (iso, time) => `${ddmmyyyy(iso)}${time ? ' ' + String(time).slice(0, 5) : ''}`
 
 // Rivit matkalaskulle kuukauden merkinnöistä
-export function travelRows(entries, sites, profile) {
+export function travelRows(entries, sites, profile, trips = []) {
   const home = (profile.homeAddress || '').trim() || 'Koti'
   const byId = id => sites.find(s => s.id === id)
   const sorted = [...entries].sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.id || 0) - (b.id || 0))
@@ -31,12 +31,18 @@ export function travelRows(entries, sites, profile) {
     const s = e.site_id && byId(e.site_id)
     return (s?.address || e.site || '').trim()
   }
+  const linked = new Map(trips.filter(t => t.entry_id && !t.archived).map(t => [t.entry_id, t]))
   const km = sorted.filter(e => num(e.km) > 0).map(e => ({
+    sort: e.work_date,
     date: dt(e.work_date),
-    route: `${home} – ${place(e) || e.site || e.client_name} – ${home}`,
+    route: linked.get(e.id)?.route || `${home} – ${place(e) || e.site || e.client_name} – ${home}`,
     purpose: purpose(e),
     km: num(e.km),
   }))
+  for (const t of standaloneTrips(trips)) {
+    km.push({ sort: t.trip_date, date: dt(t.trip_date), route: t.route || '', purpose: t.purpose || 'Työajo', km: num(t.km) })
+  }
+  km.sort((a, b) => a.sort.localeCompare(b.sort))
   const pd = sorted.filter(e => e.per_diem === 'osa' || e.per_diem === 'koko').map(e => ({
     depart: dt(e.work_date, e.depart_time || e.start_time),
     place: place(e) || e.site || '',
@@ -48,11 +54,11 @@ export function travelRows(entries, sites, profile) {
   return { km, pd }
 }
 
-export async function fillUkkoTravelClaim(ExcelJS, templateBuf, entries, sites, profile, settings = DEFAULT_SETTINGS) {
+export async function fillUkkoTravelClaim(ExcelJS, templateBuf, entries, sites, profile, settings = DEFAULT_SETTINGS, trips = []) {
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.load(templateBuf)
   const ws = wb.worksheets[0]
-  const { km, pd } = travelRows(entries, sites, profile)
+  const { km, pd } = travelRows(entries, sites, profile, trips)
   const kmRate = num(settings.ownKmRate) || 0.55
   const pdFull = num(settings.pdFull) || 54
   const pdPart = num(settings.pdPart) || 25
@@ -150,12 +156,12 @@ export async function fillUkkoTravelClaim(ExcelJS, templateBuf, entries, sites, 
   return { wb, total: round2(kmEur + pdEur), kmCount: km.length, pdCount: pd.length }
 }
 
-export async function downloadUkkoTravelClaim(entries, sites, profile, settings, month) {
+export async function downloadUkkoTravelClaim(entries, sites, profile, settings, month, trips = []) {
   const mod = await import('exceljs/dist/exceljs.min.js')
   const ExcelJS = mod.default || mod
   const res = await fetch(TEMPLATE_URL)
   if (!res.ok) throw new Error('UKKO-pohjaa ei löytynyt')
-  const { wb } = await fillUkkoTravelClaim(ExcelJS, await res.arrayBuffer(), entries, sites, profile, settings)
+  const { wb } = await fillUkkoTravelClaim(ExcelJS, await res.arrayBuffer(), entries, sites, profile, settings, trips)
   const buf = await wb.xlsx.writeBuffer()
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
