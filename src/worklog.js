@@ -24,6 +24,10 @@ export const DEFAULT_SETTINGS = {
   pdPart: 25,          // osapäiväraha 2026 (yli 6 h)
   pdFull: 54,          // kokopäiväraha 2026 (yli 10 h)
   vatPct: 25.5,
+  // UKKO-matkalaskupohjaa varten (tekstiä)
+  travelName: '',
+  homeAddress: '',
+  vehicle: '',
 }
 
 const SETTINGS_KEY = 'korpnex_tt_worklog_settings_v1'

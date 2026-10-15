@@ -23,6 +23,7 @@ import {
 } from './worklog.js'
 import { downloadWorkbook } from './worklogXlsx.js'
 import WorkRegistry, { ClientModal, SiteModal } from './WorkRegistry.jsx'
+import { downloadUkkoTravelClaim } from './ukkoMatkalasku.js'
 
 const TYOLAJIT = ['Silikonin veto', 'Elastinen saumaus', 'Akryylisaumaus', 'Pohjanauha', 'Vanhan sauman poisto', 'Ikkunan tiivistys']
 
@@ -114,6 +115,13 @@ export default function WorkLog({ showToast }) {
   const materialNames = useMemo(() => [...new Set(entries.flatMap(e => (e.materials || []).map(m => m.nimi)).filter(Boolean))], [entries])
   const siteNames = useMemo(() => [...new Set(recent.map(r => r.site).filter(Boolean))], [recent])
 
+  function updateTextSetting(key, value) {
+    setSettings(prev => {
+      const next = { ...prev, [key]: String(value || '').trim() }
+      saveSettings(next)
+      return next
+    })
+  }
   function updateSetting(key, value) {
     setSettings(prev => {
       const next = { ...prev, [key]: num(value) }
@@ -317,6 +325,24 @@ export default function WorkLog({ showToast }) {
     showToast('✓ Merkitty laskutetuksi'); load()
   }
 
+  async function downloadUkko() {
+    if (!settings.travelName || !settings.homeAddress) {
+      setSettingsOpen(true)
+      showToast('⚠ Täytä ensin matkalaskun tiedot: nimi ja kotiosoite')
+      setTimeout(() => document.getElementById('kx-wl-travelinfo')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
+      return
+    }
+    setExporting(true)
+    try {
+      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, month)
+      showToast('✓ UKKO-matkalasku ladattu')
+    } catch (e) {
+      console.error('ukko travel claim failed:', e)
+      showToast('⚠ Matkalaskun teko epäonnistui')
+    }
+    setExporting(false)
+  }
+
   async function downloadExcel() {
     setExporting(true)
     try {
@@ -473,6 +499,7 @@ export default function WorkLog({ showToast }) {
             </div>
             <div className="kx-wl-actions">
               <div className="kx-wl-big">{fmtEur(claim.total)}</div>
+              <button className="kx-btn-primary kx-btn-sm" onClick={downloadUkko} disabled={exporting}>{exporting ? 'Tehdään…' : '⬇ UKKO-matkalasku'}</button>
               <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(travelClaimText(claim, settings)) ? '✓ Matkalasku kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 Kopioi</button>
             </div>
           </div>
@@ -592,6 +619,17 @@ export default function WorkLog({ showToast }) {
               <label key={k} className="kx-wl-field">
                 <span>{label}</span>
                 <input className="kx-input" inputMode="decimal" defaultValue={str(settings[k])} onBlur={e => updateSetting(k, e.target.value)} />
+              </label>
+            ))}
+            <div id="kx-wl-travelinfo" className="kx-wl-section-title" style={{ gridColumn: '1 / -1', marginTop: 8 }}>Matkalaskun tiedot (UKKO-pohja)</div>
+            {[
+              ['travelName', 'Nimi', 'Etunimi Sukunimi'],
+              ['vehicle', 'Auton rekisterinumero', 'ABC-123'],
+              ['homeAddress', 'Kotiosoite (reitin alku ja loppu)', 'Katu 1, 60100 Seinäjoki'],
+            ].map(([k, label, ph]) => (
+              <label key={k} className={`kx-wl-field${k === 'homeAddress' ? ' kx-wl-wide' : ''}`}>
+                <span>{label}</span>
+                <input className="kx-input" placeholder={ph} defaultValue={settings[k]} onBlur={e => updateTextSetting(k, e.target.value)} />
               </label>
             ))}
             <div className="kx-hint" style={{ gridColumn: '1 / -1' }}>Oletukset koskevat uusia merkintöjä. Vanhat merkinnät pitävät omat hintansa. Verovapaat korvaukset 2026: 0,55 €/km, osapäiväraha 25 €, kokopäiväraha 54 €.</div>
