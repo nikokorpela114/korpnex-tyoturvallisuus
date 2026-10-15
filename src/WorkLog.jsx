@@ -27,7 +27,7 @@ const todayISO = () => {
 }
 const str = v => (v === null || v === undefined ? '' : String(v).replace('.', ','))
 const emptyLine = () => ({ tyolaji: '', maara: '', yksikko: 'm', tes: '' })
-const emptyMaterial = () => ({ nimi: '', maara: '', yksikko: 'paketti' })
+const emptyMaterial = () => ({ nimi: '', maara: '', yksikko: 'kpl' })
 const MATERIAALIT = ['Silikoni', 'Elastinen saumausmassa', 'Akryylimassa', 'Pohjanauha', 'Primer', 'Puhdistusaine', 'Maalarinteippi']
 
 async function copyText(text) {
@@ -586,7 +586,7 @@ export default function WorkLog({ showToast }) {
                     <input className="kx-input kx-input-sm kx-wl-line-name" list="kx-wl-materiaalit" placeholder="Materiaali" value={m.nimi} onChange={e => setMat(i, 'nimi', e.target.value)} />
                     <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="Määrä" aria-label="Määrä" value={m.maara} onChange={e => setMat(i, 'maara', e.target.value)} />
                     <select className="kx-input kx-input-sm" aria-label="Yksikkö" value={m.yksikko} onChange={e => setMat(i, 'yksikko', e.target.value)}>
-                      {/* Vanhoilla riveillä voi olla yksikkö, jota listassa ei enää ole (esim. "putki") */}
+                      {/* Vanhoilla riveillä voi olla yksikkö, jota listassa ei enää ole (esim. "putki" tai "paketti") */}
                       {(MATERIAL_UNITS.includes(m.yksikko) ? MATERIAL_UNITS : [m.yksikko, ...MATERIAL_UNITS]).map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
                     <button className="kx-icon-btn" aria-label="Poista materiaali" onClick={() => setD('materials', draft.materials.filter((_, j) => j !== i))}>✕</button>

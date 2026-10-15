@@ -40,7 +40,7 @@ export function saveSettings(s) {
 export const KIND_LABELS = { tunti: 'Tuntityö', urakka: 'Urakka', konsultointi: 'Konsultointi' }
 export const PER_DIEM_LABELS = { ei: 'Ei päivärahaa', osa: 'Osapäiväraha', koko: 'Kokopäiväraha' }
 export const UNITS = ['m', 'm²', 'kpl', 'h']
-export const MATERIAL_UNITS = ['paketti', 'kpl', 'm', 'rll', 'l', 'kg', 'pss']
+export const MATERIAL_UNITS = ['kpl', 'm', 'jm', 'l', 'rll', 'pkt', 'm²', 'kg']
 
 
 // Senttipyöristys, joka ei kompastu liukulukuihin (0,94 × 1,75 = 1,645 → 1,65)
