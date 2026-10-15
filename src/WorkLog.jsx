@@ -218,8 +218,14 @@ export default function WorkLog({ showToast }) {
     const c = calcHours(d.start_time, d.end_time, d.break_minutes)
     return c && d.kind !== 'urakka' ? { ...d, hours: str(c.hours) } : d
   }
+  // Päivärahan etäisyys: omat km, tai toisen kyydillä työmaan km-tieto
+  function tripDistance(d) {
+    if (num(d.km) > 0) return num(d.km)
+    const site = d.site_id && sites.find(x => x.id === d.site_id)
+    return num(site?.km)
+  }
   function withPerDiem(d) {
-    const sug = suggestPerDiem(d.depart_time, d.return_time, d.km)
+    const sug = suggestPerDiem(d.depart_time, d.return_time, tripDistance(d))
     return sug ? { ...d, per_diem: sug.value } : d
   }
   function setTime(k, v) {
@@ -851,7 +857,7 @@ export default function WorkLog({ showToast }) {
             <div className="kx-wl-section-title">Matkat</div>
             <div className="kx-wl-grid">
               <label className="kx-wl-field">
-                <span>Km omalla autolla (meno-paluu)</span>
+                <span>Km omalla autolla (meno-paluu, 0 = toisen kyyti)</span>
                 <input className="kx-input" inputMode="decimal" placeholder="0" value={draft.km} onChange={e => setD('km', e.target.value)} />
               </label>
               <label className="kx-wl-field">
@@ -879,10 +885,11 @@ export default function WorkLog({ showToast }) {
                 <input className="kx-input" type="time" step="300" value={draft.return_time} onChange={e => setTime('return_time', e.target.value)} />
               </label>
               {(() => {
-                const sug = suggestPerDiem(draft.depart_time, draft.return_time, draft.km)
+                const sug = suggestPerDiem(draft.depart_time, draft.return_time, tripDistance(draft))
                 return sug ? (
                   <div className="kx-wl-calc kx-wl-wide">
                     Matka {fmtDuration(sug.dur)} → <b>{PER_DIEM_LABELS[sug.value].toLowerCase()}</b> ({sug.reason})
+                    {!num(draft.km) && tripDistance(draft) > 0 && <span> · toisen kyydillä, etäisyys työmaan tiedoista ({fmtNum(tripDistance(draft))} km meno-paluu)</span>}
                     {sug.value !== draft.per_diem && <span> · valittu käsin: {PER_DIEM_LABELS[draft.per_diem].toLowerCase()}</span>}
                   </div>
                 ) : null

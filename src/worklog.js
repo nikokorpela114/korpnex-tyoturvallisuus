@@ -97,15 +97,19 @@ export function calcHours(start, end, breakMin = 0) {
   return { raw, rounded, hours: rounded / 60 }
 }
 // Päivärahaehdotus kodista kotiin -keston mukaan. Edellyttää yli 15 km
-// yhteen suuntaan, eli meno-paluu yli 30 km.
-export function suggestPerDiem(depart, ret, kmRoundTrip) {
+// yhteen suuntaan (meno-paluu yli 30 km). Etäisyys tulee omasta km-kirjauksesta
+// tai, jos kuljit toisen kyydillä (km = 0), työmaan km-tiedosta. Jos etäisyyttä
+// ei tiedetä lainkaan, ehdotus tehdään keston perusteella ja muistutetaan siitä.
+export function suggestPerDiem(depart, ret, distanceRoundTrip) {
   const a = timeToMin(depart), b = timeToMin(ret)
   if (a === null || b === null) return null
   let dur = b - a
   if (dur <= 0) dur += 24 * 60
-  if (num(kmRoundTrip) <= 30) return { dur, value: 'ei', reason: 'matka alle 15 km suuntaansa' }
-  if (dur > 600) return { dur, value: 'koko', reason: 'yli 10 h' }
-  if (dur > 360) return { dur, value: 'osa', reason: 'yli 6 h' }
+  const dist = num(distanceRoundTrip)
+  if (dist > 0 && dist <= 30) return { dur, value: 'ei', reason: 'matka alle 15 km suuntaansa' }
+  const note = dist > 0 ? '' : ', tarkista että matka on yli 15 km suuntaansa'
+  if (dur > 600) return { dur, value: 'koko', reason: `yli 10 h${note}` }
+  if (dur > 360) return { dur, value: 'osa', reason: `yli 6 h${note}` }
   return { dur, value: 'ei', reason: 'alle 6 h' }
 }
 
