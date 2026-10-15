@@ -7,7 +7,7 @@
 // lukemien väli näytetään yksityisajona, joka ei kuulu korvauksiin.
 import React, { useState } from 'react'
 import { sb } from './supabaseClient.js'
-import { num, fmtNum, fmtDate, fmtTime, fmtEur, round2, tripRoute, buildDriveLog } from './worklog.js'
+import { num, fmtNum, fmtDate, fmtTime, fmtEur, round2, buildDriveLog } from './worklog.js'
 
 const pad = n => String(n).padStart(2, '0')
 const nowDate = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
@@ -34,6 +34,21 @@ async function linkTripToEntry(trip) {
   return target.id
 }
 
+// Reitti tallennetaan muodossa "Lähtö – Kohde – Lähtö" (meno-paluu) tai "Lähtö – Kohde".
+const SEP = ' – '
+function parseRoute(route, home) {
+  const parts = String(route || '').split(SEP).map(x => x.trim()).filter(Boolean)
+  if (parts.length === 3 && parts[0] === parts[2]) return { from: parts[0], dest: parts[1], roundTrip: true }
+  if (parts.length === 2) return { from: parts[0], dest: parts[1], roundTrip: false }
+  return { from: home || '', dest: parts.length ? String(route).trim() : '', roundTrip: true }
+}
+const composeRoute = (from, dest, roundTrip) => {
+  const a = (from || '').trim() || 'Koti', b = (dest || '').trim()
+  if (!b) return ''
+  return roundTrip ? [a, b, a].join(SEP) : [a, b].join(SEP)
+}
+const siteAddr = s => (s?.address || s?.name || '').trim()
+
 // --- Ajon aloitus / lopetus / muokkaus ----------------------------------------
 export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClose, onSaved, showToast }) {
   // mode: 'start' | 'end' | 'edit' | 'new' (jälkikäteen)
@@ -47,14 +62,34 @@ export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClo
     km: trip?.km != null && trip?.odo_start == null ? String(trip.km).replace('.', ',') : '',
     site_id: trip?.site_id ?? (mode === 'start' || mode === 'new' ? (activeSites[0]?.id ?? '') : ''),
     purpose: trip?.purpose || '',
-    route: trip?.route || '',
+    ...(() => {
+      const r = parseRoute(trip?.route, settings.homeAddress)
+      const initSite = sites.find(x => String(x.id) === String(trip?.site_id ?? (mode === 'start' || mode === 'new' ? activeSites[0]?.id : '')))
+      const dest = r.dest || siteAddr(initSite)
+      const known = activeSites.some(x => siteAddr(x) === dest)
+      return { from: r.from || settings.homeAddress || '', dest, destChoice: dest ? (known ? dest : '__custom') : '', roundTrip: r.roundTrip }
+    })(),
   }))
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setD(x => ({ ...x, [k]: v }))
   const site = sites.find(s => String(s.id) === String(d.site_id))
   const client = site && clients.find(c => c.id === site.client_id)
   const autoPurpose = site ? `Työkeikka: ${client?.name || ''}${client ? ', ' : ''}${site.name}` : ''
-  const autoRoute = site ? tripRoute(settings.homeAddress, site) : ''
+  const route = composeRoute(d.from, d.dest, d.roundTrip)
+  const destOptions = [...new Map(activeSites.filter(x => siteAddr(x)).map(x => [siteAddr(x), x])).values()]
+  function pickSiteForTrip(v) {
+    const sNew = sites.find(x => String(x.id) === String(v))
+    setD(x => {
+      const next = { ...x, site_id: v }
+      // Työmaan vaihto vaihtaa kohteen, ellei kohdetta ole kirjoitettu käsin
+      if (sNew && siteAddr(sNew) && x.destChoice !== '__custom') { next.dest = siteAddr(sNew); next.destChoice = siteAddr(sNew) }
+      return next
+    })
+  }
+  function pickDest(v) {
+    if (v === '__custom') setD(x => ({ ...x, destChoice: '__custom', dest: '' }))
+    else setD(x => ({ ...x, destChoice: v, dest: v }))
+  }
   const s0 = intOrNull(d.odo_start), s1 = intOrNull(d.odo_end)
   const odoKm = s0 != null && s1 != null ? s1 - s0 : null
   const showEnd = mode !== 'start'
@@ -77,7 +112,7 @@ export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClo
       site_id: d.site_id ? Number(d.site_id) : null,
       client_name: client?.name || trip?.client_name || null,
       purpose: (d.purpose || autoPurpose).trim() || null,
-      route: (d.route || autoRoute).trim() || null,
+      route: route || null,
     }
     setSaving(true)
     const res = trip?.id
@@ -153,7 +188,7 @@ export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClo
           )}
           {mode !== 'end' && <>
             <label className="kx-wl-field kx-wl-wide"><span>Työmaa</span>
-              <select className="kx-input" value={d.site_id ?? ''} onChange={e => set('site_id', e.target.value)}>
+              <select className="kx-input" value={d.site_id ?? ''} onChange={e => pickSiteForTrip(e.target.value)}>
                 <option value="">Muu ajo (ei työmaata)</option>
                 {clients.filter(c => !c.archived).map(c => {
                   const own = activeSites.filter(x => x.client_id === c.id)
@@ -162,11 +197,27 @@ export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClo
               </select></label>
             <label className="kx-wl-field kx-wl-wide"><span>Ajon tarkoitus</span>
               <input className="kx-input" placeholder={autoPurpose || 'esim. Tarvikeostokset, asiakastapaaminen'} value={d.purpose} onChange={e => set('purpose', e.target.value)} /></label>
-            <label className="kx-wl-field kx-wl-wide"><span>Reitti (tarkat osoitteet)</span>
-              <input className="kx-input" placeholder={autoRoute || 'Koti – kohde – Koti'} value={d.route} onChange={e => set('route', e.target.value)} /></label>
+            <div className="kx-wl-section-title kx-wl-wide" style={{ marginTop: 4 }}>Reitti</div>
+            <label className="kx-wl-field kx-wl-wide"><span>Lähtöosoite</span>
+              <input className="kx-input" placeholder="Kotiosoite, esim. Kotikatu 1, 60100 Seinäjoki" value={d.from} onChange={e => set('from', e.target.value)} /></label>
+            <label className="kx-wl-field kx-wl-wide"><span>Kohde</span>
+              <select className="kx-input" value={d.destChoice} onChange={e => pickDest(e.target.value)}>
+                {!d.destChoice && <option value="">— Valitse kohde —</option>}
+                {destOptions.map(x => <option key={x.id} value={siteAddr(x)}>{siteAddr(x)}{x.address ? ` (${x.name})` : ''}</option>)}
+                <option value="__custom">✏️ Kirjoita muu osoite…</option>
+              </select></label>
+            {d.destChoice === '__custom' && (
+              <label className="kx-wl-field kx-wl-wide"><span>Kohteen osoite</span>
+                <input className="kx-input" placeholder="esim. K-Rauta, Kaarretie 2, Seinäjoki" value={d.dest} onChange={e => set('dest', e.target.value)} autoFocus /></label>
+            )}
+            <label className="kx-checkbox-row kx-wl-wide" style={{ margin: 0 }}>
+              <input type="checkbox" checked={d.roundTrip} onChange={e => set('roundTrip', e.target.checked)} />
+              Meno-paluu (takaisin lähtöosoitteeseen)
+            </label>
+            {route && <div className="kx-wl-calc kx-wl-wide">Reitti: <b>{route}</b></div>}
           </>}
         </div>
-        {!settings.homeAddress && mode !== 'end' && <div className="kx-hint">Vinkki: lisää kotiosoite Asetuksiin, niin reitti täyttyy automaattisesti.</div>}
+        {!settings.homeAddress && mode !== 'end' && <div className="kx-hint">Vinkki: lisää kotiosoite kohtaan ⚙ Asetukset → Matkalaskun tiedot, niin lähtöosoite täyttyy automaattisesti.</div>}
 
         <div className="kx-modal-actions">
           {trip?.id && mode === 'edit' && <button className="kx-btn-ghost" style={{ marginRight: 'auto', color: '#b91c1c' }} onClick={archive}>🗑 Poista</button>}
