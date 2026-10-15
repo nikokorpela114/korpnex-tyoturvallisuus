@@ -8,7 +8,8 @@
 //   4) Kaikki kuukauden merkinnät, muokkaus, toisto ja arkistointi
 // Laskenta on src/worklog.js:ssä. Tietokanta: supabase/tyoajat.sql (RLS:
 // vain kirjautunut konsultti näkee omat rivinsä, asiakasportaalissa ei koskaan).
-// Kenttäsovelluksen valikosta pääsee suoraan tänne (/?valvomo&tyoajat).
+// Näytetään omana osionaan WorkApp.jsx:ssä (/?tyoajat). Välilehdet: Kirjaukset,
+// Laskutus, Asiakkaat & työmaat, Asetukset. /?tyoajat&uusi avaa kirjauslomakkeen.
 // Asiakkaat & työmaat (WorkRegistry.jsx): työmaan valinta täyttää asiakkaan,
 // hinnat, km:t ja ALV-käsittelyn. Työaika alku–loppu → tunnit 15 min tarkkuudella,
 // ruokatauko napista; lähtö/paluu kotiin → päivärahaehdotus.
@@ -55,11 +56,14 @@ export default function WorkLog({ showToast }) {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [settings, setSettings] = useState(loadSettings)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [tab, setTab] = useState('kuukausi') // kuukausi | rekisteri
+  // kirjaukset | laskutus | rekisteri | asetukset (viimeisin muistetaan)
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem('korpnex_tt_worklog_tab') || 'kirjaukset' } catch { return 'kirjaukset' }
+  })
+  const changeTab = t => { setTab(t); try { localStorage.setItem('korpnex_tt_worklog_tab', t) } catch { /* ok */ } }
   const [clients, setClients] = useState([])
   const [sites, setSites] = useState([])
   const [clientEdit, setClientEdit] = useState(null) // { ...asiakas } | { } uusi
@@ -69,10 +73,6 @@ export default function WorkLog({ showToast }) {
   // Kenttäsovelluksen "Kirjaa työpäivä" -linkki (?uusi) avaa lomakkeen heti,
   // kun edelliset merkinnät on haettu (asiakas ja km esitäytetään niistä).
   const openNewRef = useRef(new URLSearchParams(window.location.search).has('uusi'))
-  // Tultiinko kenttäsovelluksesta (?kentta)? Silloin näytetään paluunappi ja
-  // "Kirjaa työpäivä" palaa tallennuksen jälkeen suoraan tarkastukseen.
-  const fromField = useMemo(() => new URLSearchParams(window.location.search).has('kentta'), [])
-  const backToField = () => { window.location.href = '/' }
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
@@ -293,8 +293,8 @@ export default function WorkLog({ showToast }) {
     setSaving(false)
     if (res.error) { console.error('work_entries save failed:', res.error); showToast('⚠ Tallennus epäonnistui'); return }
     showToast(draft.id ? '✓ Muutokset tallennettu' : '✓ Työpäivä kirjattu')
+    if (!draft.id) changeTab('kirjaukset')
     const saved = res.data?.[0]
-    if (fromField) { setTimeout(backToField, 600); return }
     setDraft(null)
     if (saved && monthKey(saved.work_date) !== month) setMonth(monthKey(saved.work_date))
     else load()
@@ -327,7 +327,7 @@ export default function WorkLog({ showToast }) {
 
   async function downloadUkko() {
     if (!settings.travelName || !settings.homeAddress) {
-      setSettingsOpen(true)
+      changeTab('asetukset')
       showToast('⚠ Täytä ensin matkalaskun tiedot: nimi ja kotiosoite')
       setTimeout(() => document.getElementById('kx-wl-travelinfo')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
       return
@@ -377,34 +377,40 @@ export default function WorkLog({ showToast }) {
 
   return (
     <div className="kx-wl">
-      {fromField && (
-        <button className="kx-wl-back" onClick={backToField}>← Takaisin tarkastukseen</button>
-      )}
       <div className="kx-main-head">
         <div>
           <div className="kx-main-title">Työajat</div>
-          <div className="kx-main-sub">Omat työpäivät, laskurivit ja matkalasku. Näkyy vain sinulle.</div>
+          <div className="kx-main-sub">Kirjaa työpäivät, tee laskurivit ja matkalasku. Näkyy vain sinulle.</div>
         </div>
         <div className="kx-main-head-actions">
           <button className="kx-btn-primary" onClick={() => setDraft(newDraft())}>＋ Kirjaa työpäivä</button>
         </div>
       </div>
 
-      <div className="kx-wl-seg kx-wl-tabs" role="tablist" aria-label="Työajat-näkymä">
-        <button role="tab" aria-selected={tab === 'kuukausi'} className={tab === 'kuukausi' ? 'active' : ''} onClick={() => setTab('kuukausi')}>📅 Kuukausi</button>
-        <button role="tab" aria-selected={tab === 'rekisteri'} className={tab === 'rekisteri' ? 'active' : ''} onClick={() => setTab('rekisteri')}>🏗 Asiakkaat & työmaat</button>
+      <div className="kx-wl-tabbar" role="tablist" aria-label="Työajat-näkymä">
+        {[
+          ['kirjaukset', '🗓', 'Kirjaukset', 'Kirjaukset'],
+          ['laskutus', '🧾', 'Laskutus', 'Laskutus'],
+          ['rekisteri', '🏗', 'Asiakkaat & työmaat', 'Työmaat'],
+          ['asetukset', '⚙', 'Asetukset', 'Asetukset'],
+        ].map(([k, icon, label, short]) => (
+          <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => changeTab(k)}>
+            <span aria-hidden="true" className="kx-wl-tabicon">{icon}</span>
+            <span className="kx-wl-tablong">{label}</span><span className="kx-wl-tabshort">{short}</span>
+          </button>
+        ))}
       </div>
 
       {tab === 'rekisteri' && (
         <WorkRegistry clients={clients} sites={sites} onEditClient={c => setClientEdit(c)} onEditSite={x => setSiteEdit(x)} />
       )}
 
-      {tab === 'kuukausi' && <>
+      {(tab === 'kirjaukset' || tab === 'laskutus') && <>
       <div className="kx-wl-monthbar">
         <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, -1))} aria-label="Edellinen kuukausi">‹</button>
         <div className="kx-wl-month">{monthLabel(month)}</div>
         <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, 1))} aria-label="Seuraava kuukausi">›</button>
-        <div className="kx-wl-monthstats">
+        <div className="kx-wl-monthstats" style={tab === 'kirjaukset' ? { display: 'none' } : undefined}>
           <span><b>{fmtEur(monthTotal)}</b> kuukaudessa</span>
           {unbilledTotal > 0 && unbilledTotal !== monthTotal && <span className="kx-wl-due">{fmtEur(unbilledTotal)} laskuttamatta</span>}
         </div>
@@ -415,11 +421,25 @@ export default function WorkLog({ showToast }) {
 
       {!loading && !err && entries.length === 0 && (
         <div className="kx-empty-note">
-          Ei merkintöjä kuukaudelle {monthLabel(month).toLowerCase()}.<br />
+          Ei {tab === 'laskutus' ? 'laskutettavaa' : 'merkintöjä'} kuukaudelle {monthLabel(month).toLowerCase()}.<br />
           <button className="kx-btn-primary" style={{ marginTop: 12 }} onClick={() => setDraft(newDraft())}>＋ Kirjaa ensimmäinen työpäivä</button>
         </div>
       )}
 
+      {tab === 'laskutus' && entries.length > 0 && (
+        <div className="kx-card kx-wl-reports">
+          <div>
+            <div className="kx-card-title" style={{ margin: 0 }}>Kuukauden raportit</div>
+            <div className="kx-main-sub">UKKO:n matkalaskupohja täytettynä ja koko kuukauden Excel-raportti</div>
+          </div>
+          <div className="kx-wl-actions">
+            <button className="kx-btn-primary kx-btn-sm" onClick={downloadUkko} disabled={exporting}>⬇ UKKO-matkalasku</button>
+            <button className="kx-btn-ghost kx-btn-sm" onClick={downloadExcel} disabled={exporting}>⬇ Excel-raportti</button>
+          </div>
+        </div>
+      )}
+
+      {tab === 'laskutus' && <>
       {/* 1) Laskutettavaa asiakkaittain */}
       {byClient.map(([client, list]) => {
         const unbilled = list.filter(e => !e.invoiced_at)
@@ -551,15 +571,28 @@ export default function WorkLog({ showToast }) {
         </div>
       )}
 
+      </>}
+
       {/* 4) Merkinnät */}
-      {entries.length > 0 && (
+      {tab === 'kirjaukset' && entries.length > 0 && (() => {
+        const hours = round2(entries.reduce((a, e) => a + (e.kind === 'urakka' ? 0 : num(e.hours)), 0))
+        const kmSum = round2(entries.reduce((a, e) => a + num(e.km), 0))
+        return (
+          <div className="kx-wl-stats">
+            <div><b>{entries.length}</b><span>työpäivää</span></div>
+            <div><b>{fmtNum(hours)} h</b><span>tunteja</span></div>
+            <div><b>{fmtNum(kmSum)} km</b><span>ajoa</span></div>
+            <button onClick={() => changeTab('laskutus')}><b>{fmtEur(unbilledTotal)}</b><span>laskuttamatta →</span></button>
+          </div>
+        )
+      })()}
+      {tab === 'kirjaukset' && entries.length > 0 && (
         <div className="kx-card">
           <div className="kx-wl-invoice-head">
             <div>
               <div className="kx-card-title" style={{ margin: 0 }}>Merkinnät ({entries.length})</div>
               <div className="kx-main-sub">Napauta merkintää muokataksesi tai poistaaksesi sen.</div>
             </div>
-            <button className="kx-btn-ghost kx-btn-sm" onClick={downloadExcel} disabled={exporting}>{exporting ? 'Tehdään…' : '⬇ Excel'}</button>
           </div>
           <div className="kx-wl-list">
             {entries.map(e => {
@@ -598,13 +631,11 @@ export default function WorkLog({ showToast }) {
 
       </>}
 
-      {/* Oletushinnat */}
+      {/* Asetukset */}
+      {tab === 'asetukset' && (
       <div className="kx-card">
-        <button className="kx-wl-settings-toggle" onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen}>
-          <span className="kx-card-title" style={{ margin: 0 }}>Oletushinnat</span>
-          <span className="kx-main-sub" style={{ margin: 0 }}>{fmtEur(settings.hourlyRate)}/h · kerroin {fmtNum(settings.multiplier)} · {settingsOpen ? '▲' : '▼'}</span>
-        </button>
-        {settingsOpen && (
+        <div className="kx-card-title" style={{ margin: 0 }}>Oletushinnat</div>
+        {(
           <div className="kx-wl-grid" style={{ marginTop: 14 }}>
             {[
               ['hourlyRate', 'Tuntityö €/h (alv 0)'],
@@ -636,6 +667,7 @@ export default function WorkLog({ showToast }) {
           </div>
         )}
       </div>
+      )}
 
       {/* Lomake */}
       {draft && (
@@ -898,7 +930,7 @@ export default function WorkLog({ showToast }) {
             <div className="kx-modal-actions">
               {draft.id && <button className="kx-btn-ghost" style={{ marginRight: 'auto', color: '#b91c1c' }} onClick={() => archive(draft)}>🗑 Poista</button>}
               <button className="kx-btn-ghost" disabled={saving} onClick={() => setDraft(null)}>Peruuta</button>
-              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? (fromField ? 'Tallenna ja palaa' : 'Tallenna muutokset') : fromField ? 'Kirjaa ja palaa tarkastukseen' : 'Kirjaa työpäivä'}</button>
+              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? 'Tallenna muutokset' : 'Kirjaa työpäivä'}</button>
             </div>
           </div>
         </div>
@@ -964,7 +996,21 @@ export const WORKLOG_CSS = `
 .kx-wl-table .num { text-align: right; white-space: nowrap; }
 .kx-wl-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
 .kx-wl-table tfoot .kx-wl-sub td { font-weight: 500; color: #64748b; padding-top: 2px; }
-.kx-wl-tabs { max-width: 460px; }
+.kx-wl-tabbar { display: flex; gap: 4px; border-bottom: 1px solid #e3e8ef; overflow-x: auto; scrollbar-width: none; margin-top: -4px; }
+.kx-wl-tabbar::-webkit-scrollbar { display: none; }
+.kx-wl-tabbar button { display: inline-flex; align-items: center; gap: 7px; background: none; border: none; border-bottom: 2.5px solid transparent; padding: 10px 14px 11px; font-size: 14px; font-weight: 700; color: #64748b; cursor: pointer; font-family: inherit; white-space: nowrap; margin-bottom: -1px; }
+.kx-wl-tabbar button:hover:not(.active) { color: #0a1428; }
+.kx-wl-tabshort { display: none; }
+.kx-wl-tabbar button.active { color: #0878E8; border-bottom-color: #0878E8; }
+.kx-wl-tabbar button:focus-visible { outline: 2px solid #0878E8; outline-offset: -2px; border-radius: 6px; }
+.kx-wl-reports { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: linear-gradient(135deg, #eef5ff, #fff); border-color: #cfe3fb; }
+.kx-wl-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.kx-wl-stats > * { background: #fff; border: 1px solid #e3e8ef; border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; text-align: left; font-family: inherit; }
+.kx-wl-stats b { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 18px; font-weight: 800; color: #0a1428; font-variant-numeric: tabular-nums; }
+.kx-wl-stats span { font-size: 12px; color: #64748b; font-weight: 600; }
+.kx-wl-stats button { cursor: pointer; border-color: #fde68a; background: #fffbeb; }
+.kx-wl-stats button b { color: #b45309; }
+.kx-wl-stats button:focus-visible { outline: 2px solid #0878E8; outline-offset: 2px; }
 /* iOS Safari: time-kentällä on oma minimileveys ja keskitetty teksti, joka työntää kentän yli reunan */
 .kx-wl-modal input[type="time"] { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; text-align: left; }
 .kx-wl-modal input[type="time"]::-webkit-date-and-time-value { text-align: left; }
@@ -1048,7 +1094,12 @@ export const WORKLOG_CSS = `
   .kx-wl-line-head { display: none; }
   .kx-wl-timerow { grid-template-columns: 1fr 1fr; }
   .kx-wl-break { grid-column: 1 / -1; }
-  .kx-wl-tabs { max-width: none; }
+  .kx-wl-stats { grid-template-columns: 1fr 1fr; }
+  .kx-wl-tabbar { gap: 0; }
+  .kx-wl-tabbar button { flex: 1; flex-direction: column; gap: 2px; padding: 8px 2px 9px; font-size: 12px; }
+  .kx-wl-tabicon { font-size: 17px; }
+  .kx-wl-tablong { display: none; }
+  .kx-wl-tabshort { display: inline; }
   .kx-wl-table-wide { min-width: 560px; }
   .kx-wl-modal .kx-input { font-size: 16px; } /* iOS ei zoomaa kenttään */
 }

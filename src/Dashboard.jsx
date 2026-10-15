@@ -10,7 +10,7 @@ import { ObsCard, AckAction, ReviewAction, Lightbox, StatusTag, overdue, OBS_REV
 import { usePhotoUrls, photoAsDataUrl } from './photos.js'
 import ContractorsPanel, { CONTRACTORS_CSS } from './Contractors.jsx'
 import { buildFinalReportPDF, buildObservationsCSV } from './finalReport.js'
-import WorkLog, { WORKLOG_CSS } from './WorkLog.jsx'
+import ModuleNav from './ModuleNav.jsx'
 
 // Valvomo (?valvomo) — Korpnexin hallintapaneeli, tarkoitettu käytettäväksi
 // tietokoneella. Täältä hallitaan työmaita (lisäys / nimeäminen / arkistointi),
@@ -31,9 +31,7 @@ import WorkLog, { WORKLOG_CSS } from './WorkLog.jsx'
 // Kuvat tulevat Storagesta (ks. photos.js).
 export default function Dashboard({ profile, logout }) {
   const isC = profile?.role === 'konsultti'
-  // tyomaat | tarkastus | asiakkaat | tyoajat (konsultti). ?tyoajat avaa suoraan Työajat.
-  const [view, setView] = useState(() =>
-    profile?.role === 'konsultti' && new URLSearchParams(window.location.search).has('tyoajat') ? 'tyoajat' : 'tyomaat')
+  const [view, setView] = useState('tyomaat') // tyomaat | tarkastus | asiakkaat (konsultti)
   const [clients, setClients] = useState([])
   const [reviewList, setReviewList] = useState([])
   const [lightbox, setLightbox] = useState(null)
@@ -531,7 +529,7 @@ export default function Dashboard({ profile, logout }) {
 
   return (
     <div className="kx-dashboard">
-      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS + CONTRACTORS_CSS + WORKLOG_CSS}</style>
+      <style>{DASHBOARD_CSS + OBS_REVIEW_CSS + CLIENTS_CSS + CONTRACTORS_CSS}</style>
 
       {/* Topbar */}
       <div className="kx-topbar">
@@ -549,10 +547,9 @@ export default function Dashboard({ profile, logout }) {
                 Odottaa tarkastusta{reviewList.length > 0 && <span className="kx-count-pill">{reviewList.length}</span>}
               </button>
               <button className={view === 'asiakkaat' ? 'active' : ''} onClick={() => setView('asiakkaat')}>Asiakkaat</button>
-              <button className={view === 'tyoajat' ? 'active' : ''} onClick={() => setView('tyoajat')}>Työajat</button>
             </div>
           )}
-          {isC && <a className="kx-btn-ghost kx-btn-sm kx-btn-onbrand" href="/" title="Kenttäsovellus">📱<span className="kx-hide-mobile"> Kenttäsovellus</span></a>}
+          {isC && <ModuleNav current="valvomo" compact className="kx-modnav" />}
           <span className="kx-user-chip">{profile?.name || profile?.email}</span>
           <button className="kx-btn-ghost kx-btn-sm kx-btn-onbrand" onClick={logout} title={profile?.email}>Kirjaudu ulos</button>
         </div>
@@ -566,13 +563,6 @@ export default function Dashboard({ profile, logout }) {
         </div>
       )}
 
-      {isC && view === 'tyoajat' && (
-        <div className="kx-shell kx-shell-single">
-          <main className="kx-main">
-            <WorkLog showToast={showToast} />
-          </main>
-        </div>
-      )}
 
       {isC && view === 'tarkastus' && (
         <div className="kx-shell kx-shell-single">
@@ -1472,7 +1462,7 @@ function SubcontractorsPanel({ active, archived, showArchived, setShowArchived, 
   )
 }
 
-const DASHBOARD_CSS = `
+export const DASHBOARD_CSS = `
 .kx-dashboard { min-height: 100%; background: #f4f6fa; color: #0f172a; font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; }
 .kx-dashboard * { box-sizing: border-box; }
 
@@ -1681,6 +1671,7 @@ button.kx-kpi:hover { border-color: #cbd3df; box-shadow: 0 6px 18px rgba(15,23,4
 @media (max-width: 860px) {
   .kx-topbar { flex-wrap: wrap; gap: 10px; padding: 10px 14px; position: static; }
   .kx-topbar-actions { flex-wrap: wrap; width: 100%; justify-content: space-between; }
+  .kx-modnav { order: -1; flex: 1 1 100%; }
   .kx-viewswitch { flex: 1; overflow-x: auto; }
   .kx-viewswitch button { padding: 7px 10px; font-size: 12.5px; }
   .kx-hide-mobile, .kx-user-chip { display: none; }

@@ -40,7 +40,10 @@ puhetta — helppo lisätä seuraavaksi kun perustoiminnot on testattu kentäll�
 
 ## Työajat (oma laskutus)
 
-Valvomon **Työajat**-välilehti (vain konsultille, ei koskaan asiakasportaalissa):
+**Työajat** on oma osionsa osoitteessa `/?tyoajat` (vain konsultille, ei koskaan
+asiakasportaalissa). Osioiden välillä liikutaan yläpalkin painikkeilla
+📋 Tarkastus · ⏱ Työajat · 🖥 Valvomo. Välilehdet: Kirjaukset, Laskutus
+(laskurivit, UKKO-matkalasku, Excel), Asiakkaat & työmaat ja Asetukset:
 työpäivien kirjaus (tuntityö, urakka TES-hinta × kerroin, konsultointi),
 kilometrit ja päivärahat. Kuukausinäkymä kokoaa:
 

@@ -6,6 +6,7 @@ import {
   addNote, updateNote, removeNote,
 } from './shared.js'
 import FollowUp, { useFollowUp } from './FollowUp.jsx'
+import ModuleNav from './ModuleNav.jsx'
 import { uploadPhoto } from './photos.js'
 import { putPhoto, getPhoto, delPhoto } from './photoStore.js'
 
@@ -581,7 +582,7 @@ export default function App({ profile, logout }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: 480, margin: '0 auto' }}>
       {/* Topbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 10px', background: '#0a1428', position: 'sticky', top: 0, zIndex: 20 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', rowGap: 10, alignItems: 'center', justifyContent: 'space-between', padding: 'env(safe-area-inset-top, 12px) 16px 10px', background: '#0a1428', position: 'sticky', top: 0, zIndex: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <img src="/korpnex-icon.png" alt="Korpnex" style={{ width: 32, height: 32, borderRadius: 10, objectFit: 'cover', display: 'block' }} />
           <span style={{ fontFamily: 'Jakarta, Inter, sans-serif', fontSize: 16, fontWeight: 800, color: 'white', letterSpacing: 3 }}>KORPNEX</span>
@@ -594,11 +595,12 @@ export default function App({ profile, logout }) {
           {syncMsg && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>{syncMsg}</span>}
           <button onClick={() => setMenuOpen(m => !m)} aria-label="Valikko" style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 34, height: 34, borderRadius: 10, fontSize: 17 }}>☰</button>
         </div>
+        <ModuleNav current="tarkastus" compact style={{ width: '100%' }} />
         {menuOpen && (
           <div style={{ position: 'absolute', right: 12, top: '100%', marginTop: 4, background: '#fff', border: '1px solid #e3e8ef', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.15)', minWidth: 200, overflow: 'hidden' }}>
             <div style={{ padding: '10px 14px', fontSize: 12, color: '#64748b', borderBottom: '1px solid #f1f4f9' }}>{profile?.email}</div>
-            <a href="/?valvomo&tyoajat&uusi&kentta" style={menuItem}>⏱ Kirjaa työpäivä</a>
-            <a href="/?valvomo&tyoajat&kentta" style={menuItem}>🧾 Työajat & laskutus</a>
+            <a href="/?tyoajat&uusi" style={menuItem}>⏱ Kirjaa työpäivä</a>
+            <a href="/?tyoajat" style={menuItem}>🧾 Työajat & laskutus</a>
             <a href="/?valvomo" style={menuItem}>🖥 Valvomo & asiakkaat</a>
             <button onClick={logout} style={{ ...menuItem, width: '100%', textAlign: 'left', background: 'none', border: 'none' }}>⎋ Kirjaudu ulos</button>
           </div>
