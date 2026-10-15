@@ -37,3 +37,25 @@ puhetta — helppo lisätä seuraavaksi kun perustoiminnot on testattu kentäll�
 - PDF englanniksi
 - Asentaja-/valvomonäkymät, push-ilmoitukset (näitä ei tässä sovelluksessa
   luultavasti edes tarvita, koska kyse on yhden tarkastajan kierroksesta)
+
+## Työajat (oma laskutus)
+
+Valvomon **Työajat**-välilehti (vain konsultille, ei koskaan asiakasportaalissa):
+työpäivien kirjaus (tuntityö, urakka TES-hinta × kerroin, konsultointi),
+kilometrit ja päivärahat. Kuukausinäkymä kokoaa:
+
+- **laskurivit asiakkaittain** UKKO:hon kopioitavaksi (rakentamispalvelu alv 0 /
+  käännetty verovelvollisuus, konsultointi alv 25,5 %) + "Merkitse laskutetuksi"
+- **oman matkalaskun** (verovapaat km-korvaukset ja päivärahat)
+- Excel (CSV) -viennin
+
+**Asiakkaat & työmaat** (taulut `wl_clients`, `wl_sites`, erillään turvallisuus-
+puolen asiakkaista): työmaan valinta täyttää asiakkaan Y-tunnuksen/osoitteen,
+hinnat, km:t ja ALV-käsittelyn. Työaika kirjataan alku–loppu-kellonajoilla
+(tunnit pyöristetään 15 min tarkkuudella, ruokatauko −30 min napista) ja
+lähtö/paluu kotiin -ajoista sovellus ehdottaa päivärahan.
+
+Kenttäsovelluksen valikosta: ⏱ Kirjaa työpäivä / 🧾 Työajat & laskutus.
+Käyttöönotto: aja `supabase/tyoajat.sql` SQL Editorissa. Oletushinnat
+(30 €/h, kerroin 1,75, 0,55 €/km, päivärahat 25 / 54 €) muutetaan näkymän
+alareunasta, ja ne tallentuvat laitteelle.
