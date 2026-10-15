@@ -126,3 +126,7 @@ drop policy if exists "tt wl_sites own" on public.wl_sites;
 create policy "tt wl_sites own" on public.wl_sites for all
   using ((select tt_is_consultant()) and user_id = (select auth.uid()))
   with check ((select tt_is_consultant()) and user_id = (select auth.uid()));
+
+-- Päivärahojen laskutus asiakkaalta (vain jos sovittu): asiakaskohtainen oletus + merkintäkohtainen valinta
+alter table public.wl_clients add column if not exists bill_per_diem boolean not null default false;
+alter table public.work_entries add column if not exists per_diem_billable boolean not null default false;
