@@ -137,6 +137,7 @@ export default function WorkLog({ showToast }) {
       hourly_rate: str(rate),
       km: site.km != null ? str(site.km) : d.km,
       km_rate: str(client?.km_rate ?? settings.kmRate),
+      per_diem_billable: !!client?.bill_per_diem,
     }
     return withPerDiem(next)
   }
@@ -165,6 +166,7 @@ export default function WorkLog({ showToast }) {
       travel_hours: str(base?.travel_hours || ''),
       travel_rate: str(base?.travel_rate || 0),
       per_diem: base?.per_diem ?? 'ei',
+      per_diem_billable: base?.per_diem_billable ?? false,
       // Toistossa samat kellonajat ja materiaalit valmiiksi (määrät kirjataan uudelleen)
       start_time: hhmm(base?.start_time ?? last?.start_time),
       end_time: hhmm(base?.end_time ?? last?.end_time),
@@ -189,6 +191,7 @@ export default function WorkLog({ showToast }) {
       start_time: hhmm(e.start_time), end_time: hhmm(e.end_time), break_minutes: e.break_minutes || 0,
       depart_time: hhmm(e.depart_time), return_time: hhmm(e.return_time),
       vat_mode: e.vat_mode || 'kaannetty',
+      per_diem_billable: !!e.per_diem_billable,
       freeText: !e.site_id,
     })
   }
@@ -255,6 +258,7 @@ export default function WorkLog({ showToast }) {
       travel_hours: num(d.travel_hours),
       travel_rate: num(d.travel_rate),
       per_diem: d.per_diem,
+      per_diem_billable: d.per_diem !== 'ei' && !!d.per_diem_billable,
       site_id: d.site_id || null,
       vat_mode: d.vat_mode || 'kaannetty',
       start_time: d.start_time || null,
@@ -548,7 +552,7 @@ export default function WorkLog({ showToast }) {
                         {what}
                         {e.materials?.length > 0 && ` · ${e.materials.map(m => `${m.nimi} ${fmtNum(m.maara)} ${m.yksikko}`).join(', ')}`}
                         {num(e.km) > 0 && ` · ${fmtNum(e.km)} km${e.km_billable ? '' : ' (ei laskuteta)'}`}
-                        {e.per_diem !== 'ei' && ` · ${PER_DIEM_LABELS[e.per_diem].toLowerCase()}`}
+                        {e.per_diem !== 'ei' && ` · ${PER_DIEM_LABELS[e.per_diem].toLowerCase()}${e.per_diem_billable ? ' (laskutetaan)' : ''}`}
                       </div>
                     </div>
                     <div className="kx-wl-row-sum">
@@ -821,6 +825,12 @@ export default function WorkLog({ showToast }) {
                   <option value="koko">Kokopäiväraha, yli 10 h ({fmtEur(settings.pdFull)})</option>
                 </select>
               </label>
+              {draft.per_diem !== 'ei' && (
+                <label className="kx-checkbox-row kx-wl-wide" style={{ margin: 0 }}>
+                  <input type="checkbox" checked={!!draft.per_diem_billable} onChange={e => setD('per_diem_billable', e.target.checked)} />
+                  Laskuta päiväraha asiakkaalta (vain jos sovittu)
+                </label>
+              )}
               <label className="kx-wl-field kx-wl-wide">
                 <span>Lisätieto</span>
                 <input className="kx-input" placeholder="esim. B-rappu, ikkunat 3. krs" value={draft.notes} onChange={e => setD('notes', e.target.value)} />
@@ -837,7 +847,7 @@ export default function WorkLog({ showToast }) {
               <div>
                 <div className="kx-wl-preview-label">Asiakkaalle alv 0</div>
                 <div className="kx-wl-preview-sum">{fmtEur(preview.total)}</div>
-                <div className="kx-wl-period">työ {fmtEur(preview.work)}{preview.travel ? ` + matkat ${fmtEur(preview.travel)}` : ''}</div>
+                <div className="kx-wl-period">työ {fmtEur(preview.work)}{preview.travel ? ` + matkat ${fmtEur(round2(preview.travel - preview.perDiemBill))}` : ''}{preview.perDiemBill ? ` + päiväraha ${fmtEur(preview.perDiemBill)}` : ''}</div>
               </div>
               {(preview.ownKm > 0 || preview.perDiem > 0) && (
                 <div style={{ textAlign: 'right' }}>
@@ -917,6 +927,9 @@ export const WORKLOG_CSS = `
 .kx-wl-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
 .kx-wl-table tfoot .kx-wl-sub td { font-weight: 500; color: #64748b; padding-top: 2px; }
 .kx-wl-tabs { max-width: 460px; }
+/* iOS Safari: time-kentällä on oma minimileveys ja keskitetty teksti, joka työntää kentän yli reunan */
+.kx-wl-modal input[type="time"] { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; text-align: left; }
+.kx-wl-modal input[type="time"]::-webkit-date-and-time-value { text-align: left; }
 .kx-wl-timerow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px 12px; align-items: end; }
 .kx-wl-break { height: 42px; padding: 0 14px; border-radius: 10px; border: 1.5px dashed #94a3b8; background: #fff; color: #334155; font-size: 13.5px; font-weight: 700; cursor: pointer; font-family: inherit; white-space: nowrap; }
 .kx-wl-break.on { border: 1.5px solid #047857; background: #ecfdf5; color: #047857; }

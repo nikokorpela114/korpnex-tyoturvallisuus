@@ -91,7 +91,7 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
     const cols = [
       ['Päivä', 11], ['Vk-pv', 6], ['Asiakas', 18], ['Työmaa', 24], ['Tyyppi', 12],
       ['Alkoi', 7], ['Loppui', 7], ['Tauko min', 7], ['Tunnit', 8], ['€/h', 9], ['Urakka', 28], ['Työ €', 11], ['Km', 7], ['Km €', 10],
-      ['Matka-aika €', 11], ['Yhteensä alv 0', 13], ['Päiväraha', 14], ['Päiväraha €', 11],
+      ['Matka-aika €', 11], ['Päiväraha lask. €', 11], ['Yhteensä alv 0', 13], ['Päiväraha', 14], ['Päiväraha €', 11],
       ['Lähtö kotoa', 8], ['Paluu kotiin', 8],
       ['Materiaalit (tilaajan)', 26], ['Lisätieto', 34], ['Laskutettu', 11],
     ]
@@ -132,8 +132,9 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
         : null
       const tt = round2(num(e.travel_hours) * num(e.travel_rate))
       row.getCell(C['Matka-aika €']).value = tt || null
+      row.getCell(C['Päiväraha lask. €']).value = t.perDiemBill || null
       row.getCell(C['Yhteensä alv 0']).value = {
-        formula: `${L(C['Työ €'])}+${L(C['Km €'])}+${L(C['Matka-aika €'])}`, result: t.total,
+        formula: `${L(C['Työ €'])}+${L(C['Km €'])}+${L(C['Matka-aika €'])}+${L(C['Päiväraha lask. €'])}`, result: t.total,
       }
       row.getCell(C['Päiväraha']).value = e.per_diem === 'ei' ? '' : PER_DIEM_LABELS[e.per_diem]
       row.getCell(C['Päiväraha €']).value = t.perDiem || null
@@ -141,7 +142,7 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
       row.getCell(C['Lisätieto']).value = e.notes || ''
       row.getCell(C['Laskutettu']).value = e.invoiced_at ? d(e.invoiced_at.slice(0, 10)) : ''
       row.getCell(C['Laskutettu']).numFmt = 'd.m.yyyy'
-      for (const k of ['€/h', 'Työ €', 'Km €', 'Matka-aika €', 'Yhteensä alv 0', 'Päiväraha €']) row.getCell(C[k]).numFmt = EUR
+      for (const k of ['€/h', 'Työ €', 'Km €', 'Matka-aika €', 'Päiväraha lask. €', 'Yhteensä alv 0', 'Päiväraha €']) row.getCell(C[k]).numFmt = EUR
       for (const k of ['Tunnit', 'Km']) row.getCell(C[k]).numFmt = NUM
       zebra(row, i, cols.length)
       row.getCell(C['Yhteensä alv 0']).font = { name: FONT, size: 10, bold: true }
@@ -149,7 +150,7 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
     const last = first + sorted.length - 1
     const tr = ws.getRow(last + 1)
     tr.getCell(1).value = 'Yhteensä'
-    const sums = { 'Tunnit': NUM, 'Työ €': EUR, 'Km': NUM, 'Km €': EUR, 'Matka-aika €': EUR, 'Yhteensä alv 0': EUR, 'Päiväraha €': EUR }
+    const sums = { 'Tunnit': NUM, 'Työ €': EUR, 'Km': NUM, 'Km €': EUR, 'Matka-aika €': EUR, 'Päiväraha lask. €': EUR, 'Yhteensä alv 0': EUR, 'Päiväraha €': EUR }
     for (const [k, fmt] of Object.entries(sums)) {
       const col = colL(C[k])
       let result = 0

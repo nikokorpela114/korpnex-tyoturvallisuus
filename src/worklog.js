@@ -7,6 +7,7 @@
 //   materiaalit              EI laskuteta: tilaajan omat tuotteet, joiden kulutus
 //                            näytetään laskulla tiedoksi (tilaaja laskuttaa ne eteenpäin)
 //   matkat                   km × €/km (jos laskutetaan) + matka-aika × €/h
+//   päivärahat               vain jos laskutus on sovittu asiakkaan kanssa (per_diem_billable)
 //
 // ALV: tuntityö ja urakka ovat rakentamispalvelua → käännetty verovelvollisuus
 // (alv 0, AVL 8 c §). Konsultointi ei ole rakentamispalvelua → alv 25,5 %.
@@ -115,11 +116,13 @@ export function entryTotals(e, settings = DEFAULT_SETTINGS) {
   const travelTime = round2(num(e.travel_hours) * num(e.travel_rate))
   const perDiem = e.per_diem === 'koko' ? num(settings.pdFull) : e.per_diem === 'osa' ? num(settings.pdPart) : 0
   const ownKm = round2(num(e.km) * num(settings.ownKmRate))
+  const perDiemBill = e.per_diem_billable ? perDiem : 0
   return {
     work: round2(work),
-    travel: round2(kmBill + travelTime),
-    total: round2(work + kmBill + travelTime),
+    travel: round2(kmBill + travelTime + perDiemBill),
+    total: round2(work + kmBill + travelTime + perDiemBill),
     perDiem,
+    perDiemBill,
     ownKm,
   }
 }
@@ -183,13 +186,17 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
     if (e.km_billable && num(e.km) && num(e.km_rate)) {
       add(cls, `km|${num(e.km_rate)}`, { desc: 'Matkakulut', unit: 'km', price: num(e.km_rate), addQty: num(e.km) }).entries.push(e)
     }
+    if (e.per_diem_billable && e.per_diem !== 'ei') {
+      const amount = e.per_diem === 'koko' ? num(settings.pdFull) : num(settings.pdPart)
+      if (amount) add(cls, `pd|${e.per_diem}|${amount}`, { desc: PER_DIEM_LABELS[e.per_diem], unit: 'pv', price: amount, addQty: 1, pd: true }).entries.push(e)
+    }
     if (num(e.travel_hours) && num(e.travel_rate)) {
       add(cls, `tt|${num(e.travel_rate)}`, { desc: 'Matka-aika', unit: 'h', price: num(e.travel_rate), addQty: num(e.travel_hours) }).entries.push(e)
     }
   }
   const out = {}
   for (const cls of ['kaannetty', 'alv']) {
-    const order = k => k.desc === 'Matkakulut' ? 1 : k.desc === 'Matka-aika' ? 2 : 0
+    const order = k => k.desc === 'Matkakulut' ? 1 : k.pd ? 2 : k.desc === 'Matka-aika' ? 3 : 0
     const lines = [...groups[cls].values()].sort((a, b) => order(a) - order(b)).map(l => {
       const ents = [...new Set(l.entries)]
       return { desc: l.desc, unit: l.unit, price: l.price, qty: l.qty, total: round2(l.qty * l.price), period: periodText(ents) }

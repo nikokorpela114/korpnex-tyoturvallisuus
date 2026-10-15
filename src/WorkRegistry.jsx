@@ -17,6 +17,7 @@ export function ClientModal({ client, onClose, onSaved, showToast, settings }) {
     einvoice: client?.einvoice || '', email: client?.email || '', contact: client?.contact || '',
     hourly_rate: str(client?.hourly_rate), km_rate: str(client?.km_rate),
     vat_mode: client?.vat_mode || 'kaannetty', notes: client?.notes || '',
+    bill_per_diem: !!client?.bill_per_diem,
   }))
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setD(x => ({ ...x, [k]: v }))
@@ -27,7 +28,7 @@ export function ClientModal({ client, onClose, onSaved, showToast, settings }) {
       name: d.name.trim(), business_id: d.business_id.trim() || null, address: d.address.trim() || null,
       einvoice: d.einvoice.trim() || null, email: d.email.trim() || null, contact: d.contact.trim() || null,
       hourly_rate: numOrNull(d.hourly_rate), km_rate: numOrNull(d.km_rate), vat_mode: d.vat_mode,
-      notes: d.notes.trim() || null,
+      notes: d.notes.trim() || null, bill_per_diem: d.bill_per_diem,
     }
     setSaving(true)
     const res = client?.id
@@ -75,6 +76,10 @@ export function ClientModal({ client, onClose, onSaved, showToast, settings }) {
             <select className="kx-input" value={d.vat_mode} onChange={e => set('vat_mode', e.target.value)}>
               {Object.entries(VAT_MODE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select></label>
+          <label className="kx-checkbox-row kx-wl-wide" style={{ margin: 0 }}>
+            <input type="checkbox" checked={d.bill_per_diem} onChange={e => set('bill_per_diem', e.target.checked)} />
+            Päivärahat laskutetaan tältä asiakkaalta (sovittu)
+          </label>
           <div className="kx-hint kx-wl-wide">Käännetty ALV, kun asiakas myy itse rakentamispalveluja (esim. urakoitsija). Konsultointi laskutetaan aina alv 25,5 %.</div>
           <label className="kx-wl-field kx-wl-wide"><span>Muistiinpano</span>
             <input className="kx-input" value={d.notes} onChange={e => set('notes', e.target.value)} /></label>
@@ -199,6 +204,7 @@ export default function WorkRegistry({ clients, sites, onEditClient, onEditSite 
                   {c.hourly_rate != null ? `${fmtEur(c.hourly_rate)}/h` : 'Oletustuntihinta'}
                   {c.km_rate != null && ` · ${fmtEur(c.km_rate)}/km`}
                   {` · ${c.vat_mode === 'alv' ? 'ALV 25,5 %' : 'käännetty ALV'}`}
+                  {c.bill_per_diem && ' · päivärahat laskutetaan'}
                   {c.contact && ` · ${c.contact}`}
                 </div>
               </div>
