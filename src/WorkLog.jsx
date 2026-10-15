@@ -9,6 +9,9 @@
 // Laskenta on src/worklog.js:ssä. Tietokanta: supabase/tyoajat.sql (RLS:
 // vain kirjautunut konsultti näkee omat rivinsä, asiakasportaalissa ei koskaan).
 // Kenttäsovelluksen valikosta pääsee suoraan tänne (/?valvomo&tyoajat).
+// Asiakkaat & työmaat (WorkRegistry.jsx): työmaan valinta täyttää asiakkaan,
+// hinnat, km:t ja ALV-käsittelyn. Työaika alku–loppu → tunnit 15 min tarkkuudella,
+// ruokatauko napista; lähtö/paluu kotiin → päivärahaehdotus.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { sb } from './supabaseClient.js'
 import {
@@ -16,8 +19,10 @@ import {
   buildMaterialUsage, materialUsageText,
   num, round2, unitPrice, entryTotals, buildInvoice, invoiceText, buildTravelClaim, travelClaimText,
   monthKey, monthRange, shiftMonth, monthLabel, fmtEur, fmtNum, fmtDate,
+  calcHours, suggestPerDiem, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
 } from './worklog.js'
 import { downloadWorkbook } from './worklogXlsx.js'
+import WorkRegistry, { ClientModal, SiteModal } from './WorkRegistry.jsx'
 
 const TYOLAJIT = ['Silikonin veto', 'Elastinen saumaus', 'Akryylisaumaus', 'Pohjanauha', 'Vanhan sauman poisto', 'Ikkunan tiivistys']
 
@@ -26,6 +31,8 @@ const todayISO = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 const str = v => (v === null || v === undefined ? '' : String(v).replace('.', ','))
+const hhmm = t => (t ? String(t).slice(0, 5) : '')
+const BREAK_MIN = 30
 const emptyLine = () => ({ tyolaji: '', maara: '', yksikko: 'm', tes: '' })
 const emptyMaterial = () => ({ nimi: '', maara: '', yksikko: 'kpl' })
 const MATERIAALIT = ['Silikoni', 'Elastinen saumausmassa', 'Akryylimassa', 'Pohjanauha', 'Primer', 'Puhdistusaine', 'Maalarinteippi']
@@ -51,6 +58,13 @@ export default function WorkLog({ showToast }) {
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [tab, setTab] = useState('kuukausi') // kuukausi | rekisteri
+  const [clients, setClients] = useState([])
+  const [sites, setSites] = useState([])
+  const [clientEdit, setClientEdit] = useState(null) // { ...asiakas } | { } uusi
+  const [siteEdit, setSiteEdit] = useState(null)
+  // Uusi työmaa avattu työpäivälomakkeesta → valitaan se lomakkeelle tallennuksen jälkeen
+  const siteForDraftRef = useRef(false)
   // Kenttäsovelluksen "Kirjaa työpäivä" -linkki (?uusi) avaa lomakkeen heti,
   // kun edelliset merkinnät on haettu (asiakas ja km esitäytetään niistä).
   const openNewRef = useRef(new URLSearchParams(window.location.search).has('uusi'))
@@ -62,12 +76,18 @@ export default function WorkLog({ showToast }) {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     const { from, to } = monthRange(month)
-    const [m, r] = await Promise.all([
+    const [m, r, c, st] = await Promise.all([
       sb.from('work_entries').select('*').eq('archived', false).gte('work_date', from).lte('work_date', to)
         .order('work_date', { ascending: false }).order('id', { ascending: false }),
-      sb.from('work_entries').select('client_name, site, kind, hourly_rate, km, km_rate, km_billable, multiplier')
-        .eq('archived', false).order('work_date', { ascending: false }).limit(300),
+      sb.from('work_entries').select('client_name, site, site_id, kind, hourly_rate, km, km_rate, km_billable, multiplier, start_time, end_time, break_minutes')
+        .eq('archived', false).order('work_date', { ascending: false }).order('id', { ascending: false }).limit(300),
+      sb.from('wl_clients').select('*').order('name'),
+      sb.from('wl_sites').select('*').order('name'),
     ])
+    const regClients = c.error ? [] : (c.data || [])
+    const regSites = st.error ? [] : (st.data || [])
+    if (!c.error) setClients(regClients)
+    if (!st.error) setSites(regSites)
     if (m.error) {
       console.error('work_entries load failed:', m.error)
       setErr(/relation|does not exist|schema cache/i.test(m.error.message)
@@ -79,7 +99,7 @@ export default function WorkLog({ showToast }) {
     setLoading(false)
     if (openNewRef.current) {
       openNewRef.current = false
-      setDraft(newDraft(null, (r.data || [])[0]))
+      setDraft(newDraft(null, { last: (r.data || [])[0], clients: regClients, sites: regSites }))
       const p = new URLSearchParams(window.location.search)
       p.delete('uusi')
       const qs = p.toString().replace(/=(?=&|$)/g, '')
@@ -103,13 +123,37 @@ export default function WorkLog({ showToast }) {
   }
 
   // --- Lomake ---------------------------------------------------------------
-  function newDraft(base, lastOverride) {
-    const last = lastOverride || recent[0]
-    return {
+  const clientById = (id, list = clients) => list.find(c => c.id === id) || null
+  const clientByName = name => clients.find(c => !c.archived && c.name.trim().toLowerCase() === (name || '').trim().toLowerCase()) || null
+
+  // Työmaan valinta täyttää asiakkaan, ALV:n, km:t ja hinnat
+  function applySite(d, site, ctx = {}) {
+    const client = clientById(site.client_id, ctx.clients || clients)
+    const kind = d.id ? d.kind : site.kind
+    const rate = kind === 'konsultointi' ? settings.consultRate : (client?.hourly_rate ?? settings.hourlyRate)
+    const next = {
+      ...d, site_id: site.id, site: site.name, client_name: client?.name || d.client_name,
+      vat_mode: client?.vat_mode || 'kaannetty', kind, freeText: false,
+      hourly_rate: str(rate),
+      km: site.km != null ? str(site.km) : d.km,
+      km_rate: str(client?.km_rate ?? settings.kmRate),
+    }
+    return withPerDiem(next)
+  }
+
+  function newDraft(base, ctx = {}) {
+    const last = ctx.last ?? recent[0]
+    const siteList = ctx.sites || sites
+    const siteId = base?.site_id ?? last?.site_id
+    const site = siteList.find(x => x.id === siteId && !x.archived)
+    let d = {
       id: null, invoiced_at: null,
       work_date: todayISO(),
-      client_name: base?.client_name ?? last?.client_name ?? '',
-      site: base?.site ?? last?.site ?? '',
+      site_id: base?.site_id ?? null,
+      freeText: false,
+      vat_mode: base?.vat_mode ?? 'kaannetty',
+      client_name: base?.client_name ?? (site ? '' : last?.client_name ?? ''),
+      site: base?.site ?? (site ? '' : last?.site ?? ''),
       kind: base?.kind ?? 'tunti',
       hours: str(base?.hours ?? 8),
       hourly_rate: str(base?.hourly_rate ?? settings.hourlyRate),
@@ -121,10 +165,18 @@ export default function WorkLog({ showToast }) {
       travel_hours: str(base?.travel_hours || ''),
       travel_rate: str(base?.travel_rate || 0),
       per_diem: base?.per_diem ?? 'ei',
-      // Toistossa materiaalit tulevat valmiiksi, määrät kirjataan uudelleen
+      // Toistossa samat kellonajat ja materiaalit valmiiksi (määrät kirjataan uudelleen)
+      start_time: hhmm(base?.start_time ?? last?.start_time),
+      end_time: hhmm(base?.end_time ?? last?.end_time),
+      break_minutes: base?.break_minutes ?? 0,
+      depart_time: hhmm(base?.depart_time),
+      return_time: hhmm(base?.return_time),
       materials: (base?.materials || []).map(m => ({ nimi: m.nimi, yksikko: m.yksikko, maara: '' })),
       notes: '',
     }
+    if (site && !base) d = applySite(d, site, ctx)
+    else if (!site && !d.client_name) d.freeText = !(ctx.sites || sites).some(x => !x.archived)
+    return withHours(d)
   }
   function editDraft(e) {
     setDraft({
@@ -134,6 +186,10 @@ export default function WorkLog({ showToast }) {
       lines: e.lines?.length ? e.lines.map(l => ({ ...l, maara: str(l.maara), tes: str(l.tes) })) : [emptyLine()],
       materials: (e.materials || []).map(m => ({ nimi: m.nimi, yksikko: m.yksikko, maara: str(m.maara) })),
       notes: e.notes || '',
+      start_time: hhmm(e.start_time), end_time: hhmm(e.end_time), break_minutes: e.break_minutes || 0,
+      depart_time: hhmm(e.depart_time), return_time: hhmm(e.return_time),
+      vat_mode: e.vat_mode || 'kaannetty',
+      freeText: !e.site_id,
     })
   }
   const setD = (k, v) => setDraft(d => ({ ...d, [k]: v }))
@@ -142,21 +198,39 @@ export default function WorkLog({ showToast }) {
       let rate = d.hourly_rate
       if (kind === 'konsultointi' && num(rate) === num(settings.hourlyRate)) rate = str(settings.consultRate)
       if (kind === 'tunti' && num(rate) === num(settings.consultRate)) rate = str(settings.hourlyRate)
-      return { ...d, kind, hourly_rate: rate }
+      return withHours({ ...d, kind, hourly_rate: rate })
     })
   }
-  function pickClient(name) {
+  // Tunnit kellonajoista (15 min pyöristys). Käsin kirjoitettu tunti-arvo säilyy,
+  // kunnes kellonaikoja tai taukoa muutetaan.
+  function withHours(d) {
+    const c = calcHours(d.start_time, d.end_time, d.break_minutes)
+    return c && d.kind !== 'urakka' ? { ...d, hours: str(c.hours) } : d
+  }
+  function withPerDiem(d) {
+    const sug = suggestPerDiem(d.depart_time, d.return_time, d.km)
+    return sug ? { ...d, per_diem: sug.value } : d
+  }
+  function setTime(k, v) {
     setDraft(d => {
-      const prev = recent.find(r => r.client_name === name)
-      if (!prev || d.id) return { ...d, client_name: name }
-      return {
-        ...d, client_name: name,
-        site: d.site || prev.site || '',
-        km: d.km || str(prev.km || ''),
-        km_billable: prev.km_billable,
-        km_rate: str(prev.km_rate ?? settings.kmRate),
-      }
+      let next = { ...d, [k]: v }
+      if (k === 'start_time' || k === 'end_time' || k === 'break_minutes') next = withHours(next)
+      if (k === 'depart_time' || k === 'return_time') next = withPerDiem(next)
+      return next
     })
+  }
+  function toggleBreak() {
+    setTime('break_minutes', draft.break_minutes ? 0 : BREAK_MIN)
+  }
+  function pickSite(v) {
+    if (v === '__new') {
+      siteForDraftRef.current = true
+      setSiteEdit({ client_id: clientByName(draft.client_name)?.id })
+      return
+    }
+    if (v === '__free') { setDraft(d => ({ ...d, site_id: null, freeText: true })); return }
+    const site = sites.find(x => String(x.id) === String(v))
+    if (site) setDraft(d => applySite(d, site))
   }
   const setMat = (i, k, v) => setDraft(d => ({ ...d, materials: d.materials.map((m, j) => j === i ? { ...m, [k]: v } : m) }))
   const setLine = (i, k, v) => setDraft(d => ({ ...d, lines: d.lines.map((l, j) => j === i ? { ...l, [k]: v } : l) }))
@@ -181,6 +255,13 @@ export default function WorkLog({ showToast }) {
       travel_hours: num(d.travel_hours),
       travel_rate: num(d.travel_rate),
       per_diem: d.per_diem,
+      site_id: d.site_id || null,
+      vat_mode: d.vat_mode || 'kaannetty',
+      start_time: d.start_time || null,
+      end_time: d.end_time || null,
+      break_minutes: Number(d.break_minutes) || 0,
+      depart_time: d.depart_time || null,
+      return_time: d.return_time || null,
       notes: d.notes.trim() || null,
       invoiced_at: d.invoiced_at || null,
     }
@@ -189,7 +270,7 @@ export default function WorkLog({ showToast }) {
   async function save() {
     const row = draftToRow(draft)
     if (!row.work_date) { showToast('⚠ Valitse päivä'); return }
-    if (!row.client_name) { showToast('⚠ Kirjoita asiakas'); return }
+    if (!row.client_name) { showToast(draft.freeText ? '⚠ Kirjoita asiakas' : '⚠ Valitse työmaa'); return }
     if (row.kind === 'urakka' ? !row.lines.length : !row.hours) {
       showToast(row.kind === 'urakka' ? '⚠ Lisää vähintään yksi urakkarivi (määrä ja TES-hinta)' : '⚠ Kirjoita tunnit'); return
     }
@@ -206,6 +287,17 @@ export default function WorkLog({ showToast }) {
     if (saved && monthKey(saved.work_date) !== month) setMonth(monthKey(saved.work_date))
     else load()
   }
+
+  const reloadRegistry = useCallback(async () => {
+    const [c, st] = await Promise.all([
+      sb.from('wl_clients').select('*').order('name'),
+      sb.from('wl_sites').select('*').order('name'),
+    ])
+    const cl = c.error ? clients : (c.data || [])
+    const si = st.error ? sites : (st.data || [])
+    setClients(cl); setSites(si)
+    return { clients: cl, sites: si }
+  }, [clients, sites])
 
   async function archive(e) {
     if (!window.confirm(`Poistetaanko merkintä ${fmtDate(e.work_date)} (${e.client_name})?`)) return
@@ -224,7 +316,7 @@ export default function WorkLog({ showToast }) {
   async function downloadExcel() {
     setExporting(true)
     try {
-      await downloadWorkbook(entries, settings, month)
+      await downloadWorkbook(entries, settings, month, clients, sites)
       showToast('✓ Excel ladattu')
     } catch (e) {
       console.error('xlsx export failed:', e)
@@ -268,6 +360,16 @@ export default function WorkLog({ showToast }) {
         </div>
       </div>
 
+      <div className="kx-wl-seg kx-wl-tabs" role="tablist" aria-label="Työajat-näkymä">
+        <button role="tab" aria-selected={tab === 'kuukausi'} className={tab === 'kuukausi' ? 'active' : ''} onClick={() => setTab('kuukausi')}>📅 Kuukausi</button>
+        <button role="tab" aria-selected={tab === 'rekisteri'} className={tab === 'rekisteri' ? 'active' : ''} onClick={() => setTab('rekisteri')}>🏗 Asiakkaat & työmaat</button>
+      </div>
+
+      {tab === 'rekisteri' && (
+        <WorkRegistry clients={clients} sites={sites} onEditClient={c => setClientEdit(c)} onEditSite={x => setSiteEdit(x)} />
+      )}
+
+      {tab === 'kuukausi' && <>
       <div className="kx-wl-monthbar">
         <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, -1))} aria-label="Edellinen kuukausi">‹</button>
         <div className="kx-wl-month">{monthLabel(month)}</div>
@@ -293,6 +395,8 @@ export default function WorkLog({ showToast }) {
         const unbilled = list.filter(e => !e.invoiced_at)
         const inv = buildInvoice(unbilled, settings)
         const billedTotal = round2(list.filter(e => e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0))
+        const cl = clientById(list.find(e => e.site_id)?.site_id && sites.find(x => x.id === list.find(e => e.site_id).site_id)?.client_id) || clientByName(client)
+        const info = clientInfoLines(cl)
         return (
           <div key={client} className="kx-card kx-wl-invoice">
             <div className="kx-wl-invoice-head" style={unbilled.length ? undefined : { marginBottom: 0 }}>
@@ -302,10 +406,13 @@ export default function WorkLog({ showToast }) {
                   {unbilled.length ? `${unbilled.length} laskuttamatonta päivää` : 'Kaikki laskutettu'}
                   {billedTotal > 0 && ` · laskutettu ${fmtEur(billedTotal)}`}
                 </div>
+                {unbilled.length > 0 && (info.length
+                  ? <div className="kx-wl-period" style={{ marginTop: 3 }}>{info.join(' · ')}</div>
+                  : cl && <button className="kx-wl-linkbtn" onClick={() => setClientEdit(cl)}>⚠ Lisää asiakkaalle Y-tunnus ja laskutusosoite</button>)}
               </div>
               {unbilled.length > 0 && (
                 <div className="kx-wl-actions">
-                  <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(invoiceText(client, inv, settings)) ? '✓ Laskurivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 Kopioi laskurivit</button>
+                  <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(invoiceText(client, inv, settings, cl)) ? '✓ Laskurivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 Kopioi laskurivit</button>
                   <button className="kx-btn-ghost kx-btn-sm" onClick={() => markInvoiced(unbilled, client)}>✓ Merkitse laskutetuksi</button>
                 </div>
               )}
@@ -437,6 +544,7 @@ export default function WorkLog({ showToast }) {
                       <div className="kx-wl-row-title">{e.client_name}{e.site ? `, ${e.site}` : ''}</div>
                       <div className="kx-wl-row-sub">
                         <span className={`kx-wl-kind kx-wl-kind-${e.kind}`}>{KIND_LABELS[e.kind]}</span>
+                        {e.start_time && e.end_time && `${fmtTime(e.start_time)}–${fmtTime(e.end_time)}${e.break_minutes ? ` (−${e.break_minutes} min)` : ''} · `}
                         {what}
                         {e.materials?.length > 0 && ` · ${e.materials.map(m => `${m.nimi} ${fmtNum(m.maara)} ${m.yksikko}`).join(', ')}`}
                         {num(e.km) > 0 && ` · ${fmtNum(e.km)} km${e.km_billable ? '' : ' (ei laskuteta)'}`}
@@ -456,6 +564,8 @@ export default function WorkLog({ showToast }) {
           </div>
         </div>
       )}
+
+      </>}
 
       {/* Oletushinnat */}
       <div className="kx-card">
@@ -512,22 +622,87 @@ export default function WorkLog({ showToast }) {
                 <input className="kx-input" type="date" value={draft.work_date} onChange={e => setD('work_date', e.target.value)} />
               </label>
               <label className="kx-wl-field">
-                <span>Asiakas</span>
-                <input className="kx-input" list="kx-wl-clients" placeholder="esim. Zaumax Oy" value={draft.client_name} onChange={e => pickClient(e.target.value)} />
-                <datalist id="kx-wl-clients">{clientNames.map(c => <option key={c} value={c} />)}</datalist>
-              </label>
-              <label className="kx-wl-field kx-wl-wide">
-                <span>Työmaa / kohde</span>
-                <input className="kx-input" list="kx-wl-sites" placeholder="esim. Kauhajoki" value={draft.site} onChange={e => setD('site', e.target.value)} />
-                <datalist id="kx-wl-sites">{siteNames.map(s => <option key={s} value={s} />)}</datalist>
+                <span>Työmaa</span>
+                <select className="kx-input" value={draft.freeText ? '__free' : (draft.site_id ?? '')} onChange={e => pickSite(e.target.value)}>
+                  {!draft.site_id && !draft.freeText && <option value="">— Valitse työmaa —</option>}
+                  {clients.filter(c => !c.archived).map(c => {
+                    const own = sites.filter(x => x.client_id === c.id && (!x.archived || x.id === draft.site_id))
+                    return own.length ? (
+                      <optgroup key={c.id} label={c.name}>
+                        {own.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      </optgroup>
+                    ) : null
+                  })}
+                  <option value="__new">＋ Uusi työmaa…</option>
+                  <option value="__free">Muu (kirjoita vapaasti)</option>
+                </select>
               </label>
             </div>
+            {draft.freeText ? (
+              <div className="kx-wl-grid">
+                <label className="kx-wl-field">
+                  <span>Asiakas</span>
+                  <input className="kx-input" list="kx-wl-clients" placeholder="esim. Zaumax Oy" value={draft.client_name} onChange={e => setD('client_name', e.target.value)} />
+                  <datalist id="kx-wl-clients">{clientNames.map(c => <option key={c} value={c} />)}</datalist>
+                </label>
+                <label className="kx-wl-field">
+                  <span>Työmaa / kohde</span>
+                  <input className="kx-input" list="kx-wl-sites" placeholder="esim. Kauhajoki" value={draft.site} onChange={e => setD('site', e.target.value)} />
+                  <datalist id="kx-wl-sites">{siteNames.map(x => <option key={x} value={x} />)}</datalist>
+                </label>
+                <label className="kx-wl-field kx-wl-wide">
+                  <span>ALV-käsittely</span>
+                  <select className="kx-input" value={draft.vat_mode} onChange={e => setD('vat_mode', e.target.value)}>
+                    {Object.entries(VAT_MODE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                  </select>
+                </label>
+              </div>
+            ) : draft.site_id && (() => {
+              const site = sites.find(x => x.id === draft.site_id)
+              const cl = site && clientById(site.client_id)
+              const info = clientInfoLines(cl)
+              return (
+                <div className="kx-wl-clientinfo">
+                  <div><b>{cl?.name || draft.client_name}</b>{site?.address ? ` · ${site.address}` : ''}</div>
+                  <div className="kx-wl-period">
+                    {info.length ? info.join(' · ') : 'Y-tunnus ja laskutusosoite puuttuvat'}
+                    {' · '}{draft.vat_mode === 'alv' ? 'ALV 25,5 %' : 'käännetty ALV'}
+                  </div>
+                </div>
+              )
+            })()}
 
             <div className="kx-wl-seg" role="radiogroup" aria-label="Työn tyyppi">
               {Object.entries(KIND_LABELS).map(([k, label]) => (
                 <button key={k} role="radio" aria-checked={draft.kind === k} className={draft.kind === k ? 'active' : ''} onClick={() => setKind(k)}>{label}</button>
               ))}
             </div>
+
+            <div className="kx-wl-section-title">Työaika</div>
+            <div className="kx-wl-timerow">
+              <label className="kx-wl-field">
+                <span>Alkoi</span>
+                <input className="kx-input" type="time" step="300" value={draft.start_time} onChange={e => setTime('start_time', e.target.value)} />
+              </label>
+              <label className="kx-wl-field">
+                <span>Loppui</span>
+                <input className="kx-input" type="time" step="300" value={draft.end_time} onChange={e => setTime('end_time', e.target.value)} />
+              </label>
+              <button type="button" className={`kx-wl-break${draft.break_minutes ? ' on' : ''}`} aria-pressed={!!draft.break_minutes} onClick={toggleBreak}>
+                {draft.break_minutes ? `✓ Ruokatauko −${draft.break_minutes} min` : `＋ Ruokatauko ${BREAK_MIN} min`}
+              </button>
+            </div>
+            {(() => {
+              const c = calcHours(draft.start_time, draft.end_time, draft.break_minutes)
+              if (!c) return draft.start_time || draft.end_time ? <div className="kx-wl-period">Valitse sekä alkamis- että loppumisaika.</div> : null
+              return (
+                <div className="kx-wl-calc">
+                  {fmtTime(draft.start_time)}–{fmtTime(draft.end_time)}{draft.break_minutes ? ` − ${draft.break_minutes} min` : ''} = <b>{fmtNum(c.hours)} h</b>
+                  {c.raw !== c.rounded && <span> (todellinen {fmtDuration(c.raw)}, pyöristetty 15 min)</span>}
+                  {draft.kind === 'urakka' && <span> · urakassa tunnit vain tiedoksi</span>}
+                </div>
+              )
+            })()}
 
             {draft.kind !== 'urakka' ? (
               <div className="kx-wl-grid">
@@ -621,6 +796,23 @@ export default function WorkLog({ showToast }) {
                 <span>Matka-ajan hinta €/h (0 = ei laskuteta)</span>
                 <input className="kx-input" inputMode="decimal" value={draft.travel_rate} onChange={e => setD('travel_rate', e.target.value)} />
               </label>
+              <label className="kx-wl-field">
+                <span>Lähdin kotoa</span>
+                <input className="kx-input" type="time" step="300" value={draft.depart_time} onChange={e => setTime('depart_time', e.target.value)} />
+              </label>
+              <label className="kx-wl-field">
+                <span>Palasin kotiin</span>
+                <input className="kx-input" type="time" step="300" value={draft.return_time} onChange={e => setTime('return_time', e.target.value)} />
+              </label>
+              {(() => {
+                const sug = suggestPerDiem(draft.depart_time, draft.return_time, draft.km)
+                return sug ? (
+                  <div className="kx-wl-calc kx-wl-wide">
+                    Matka {fmtDuration(sug.dur)} → <b>{PER_DIEM_LABELS[sug.value].toLowerCase()}</b> ({sug.reason})
+                    {sug.value !== draft.per_diem && <span> · valittu käsin: {PER_DIEM_LABELS[draft.per_diem].toLowerCase()}</span>}
+                  </div>
+                ) : null
+              })()}
               <label className="kx-wl-field kx-wl-wide">
                 <span>Päiväraha (oma matkalasku)</span>
                 <select className="kx-input" value={draft.per_diem} onChange={e => setD('per_diem', e.target.value)}>
@@ -663,6 +855,41 @@ export default function WorkLog({ showToast }) {
           </div>
         </div>
       )}
+      {/* Rekisterilomakkeet (pinoutuvat työpäivälomakkeen päälle) */}
+      {siteEdit && (
+        <SiteModal
+          site={siteEdit.id ? siteEdit : null}
+          defaultClientId={siteEdit.client_id}
+          clients={clients.filter(c => !c.archived)}
+          showToast={showToast}
+          onNewClient={() => setClientEdit({ _forSite: true })}
+          onClose={() => { setSiteEdit(null); siteForDraftRef.current = false }}
+          onSaved={async saved => {
+            const reg = await reloadRegistry()
+            setSiteEdit(null)
+            if (saved && siteForDraftRef.current) {
+              const site = reg.sites.find(x => x.id === saved.id)
+              if (site) setDraft(d => d && applySite(d, site, reg))
+            }
+            siteForDraftRef.current = false
+          }}
+        />
+      )}
+      {clientEdit && (
+        <ClientModal
+          client={clientEdit.id ? clientEdit : null}
+          settings={settings}
+          showToast={showToast}
+          onClose={() => setClientEdit(null)}
+          onSaved={async saved => {
+            await reloadRegistry()
+            const forSite = clientEdit._forSite
+            setClientEdit(null)
+            if (saved && forSite) setSiteEdit(x => ({ ...(x || {}), client_id: saved.id }))
+          }}
+        />
+      )}
+
     </div>
   )
 }
@@ -689,6 +916,18 @@ export const WORKLOG_CSS = `
 .kx-wl-table .num { text-align: right; white-space: nowrap; }
 .kx-wl-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
 .kx-wl-table tfoot .kx-wl-sub td { font-weight: 500; color: #64748b; padding-top: 2px; }
+.kx-wl-tabs { max-width: 460px; }
+.kx-wl-timerow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px 12px; align-items: end; }
+.kx-wl-break { height: 42px; padding: 0 14px; border-radius: 10px; border: 1.5px dashed #94a3b8; background: #fff; color: #334155; font-size: 13.5px; font-weight: 700; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.kx-wl-break.on { border: 1.5px solid #047857; background: #ecfdf5; color: #047857; }
+.kx-wl-break:focus-visible, .kx-wl-linkbtn:focus-visible { outline: 2px solid #0878E8; outline-offset: 2px; }
+.kx-wl-calc { font-size: 13px; color: #334155; background: #f4f6fa; border-radius: 10px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
+.kx-wl-calc b { color: #0a1428; font-size: 14.5px; }
+.kx-wl-calc span { color: #64748b; }
+.kx-wl-clientinfo { background: #eef5ff; border: 1px solid #cfe3fb; border-radius: 10px; padding: 9px 12px; font-size: 13.5px; color: #0a3d7a; }
+.kx-wl-linkbtn { background: none; border: none; padding: 0; margin-top: 4px; color: #b45309; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; text-align: left; }
+.kx-wl-inline-row { display: flex; gap: 8px; align-items: center; }
+.kx-wl-inline-row > select { flex: 1; min-width: 0; }
 .kx-wl-matlist { display: flex; flex-direction: column; font-size: 13.5px; }
 .kx-wl-matlist > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 8px; border-bottom: 1px solid #f1f4f9; }
 .kx-wl-matlist b { font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -756,6 +995,9 @@ export const WORKLOG_CSS = `
   .kx-wl-edit { padding: 6px 8px; }
   .kx-wl-edit-label { display: none; }
   .kx-wl-line-head { display: none; }
+  .kx-wl-timerow { grid-template-columns: 1fr 1fr; }
+  .kx-wl-break { grid-column: 1 / -1; }
+  .kx-wl-tabs { max-width: none; }
   .kx-wl-table-wide { min-width: 560px; }
   .kx-wl-modal .kx-input { font-size: 16px; } /* iOS ei zoomaa kenttään */
 }

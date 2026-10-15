@@ -9,7 +9,7 @@
 // päivittyvät, jos riviä muokataan Excelissä.
 import {
   KIND_LABELS, PER_DIEM_LABELS, num, round2, unitPrice, entryTotals,
-  buildInvoice, buildTravelClaim, buildMaterialUsage, monthLabel,
+  buildInvoice, buildTravelClaim, buildMaterialUsage, monthLabel, fmtTime, clientInfoLines,
 } from './worklog.js'
 
 const NAVY = 'FF0A1428'
@@ -72,7 +72,13 @@ function totalRow(row, cols) {
 const sumF = (col, from, to) => `SUM(${col}${from}:${col}${to})`
 const colL = n => String.fromCharCode(64 + n)
 
-export function buildWorkbook(ExcelJS, entries, settings, month) {
+export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], sites = []) {
+  const clientFor = (name, list) => {
+    const sid = list.find(e => e.site_id)?.site_id
+    const site = sites.find(x => x.id === sid)
+    return (site && clients.find(c => c.id === site.client_id))
+      || clients.find(c => c.name.trim().toLowerCase() === name.trim().toLowerCase()) || null
+  }
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Korpnex Oy'
   wb.created = new Date()
@@ -84,8 +90,9 @@ export function buildWorkbook(ExcelJS, entries, settings, month) {
     const ws = wb.addWorksheet('Työpäivät', { views: [{ state: 'frozen', ySplit: 4 }] })
     const cols = [
       ['Päivä', 11], ['Vk-pv', 6], ['Asiakas', 18], ['Työmaa', 24], ['Tyyppi', 12],
-      ['Tunnit', 8], ['€/h', 9], ['Urakka', 28], ['Työ €', 11], ['Km', 7], ['Km €', 10],
+      ['Alkoi', 7], ['Loppui', 7], ['Tauko min', 7], ['Tunnit', 8], ['€/h', 9], ['Urakka', 28], ['Työ €', 11], ['Km', 7], ['Km €', 10],
       ['Matka-aika €', 11], ['Yhteensä alv 0', 13], ['Päiväraha', 14], ['Päiväraha €', 11],
+      ['Lähtö kotoa', 8], ['Paluu kotiin', 8],
       ['Materiaalit (tilaajan)', 26], ['Lisätieto', 34], ['Laskutettu', 11],
     ]
     const C = Object.fromEntries(cols.map(([l], i) => [l, i + 1]))
@@ -105,6 +112,11 @@ export function buildWorkbook(ExcelJS, entries, settings, month) {
       row.getCell(C['Asiakas']).value = e.client_name
       row.getCell(C['Työmaa']).value = e.site || ''
       row.getCell(C['Tyyppi']).value = KIND_LABELS[e.kind]
+      row.getCell(C['Alkoi']).value = fmtTime(e.start_time)
+      row.getCell(C['Loppui']).value = fmtTime(e.end_time)
+      row.getCell(C['Tauko min']).value = e.break_minutes || null
+      row.getCell(C['Lähtö kotoa']).value = fmtTime(e.depart_time)
+      row.getCell(C['Paluu kotiin']).value = fmtTime(e.return_time)
       if (e.kind === 'urakka') {
         row.getCell(C['Urakka']).value = (e.lines || [])
           .map(l => `${l.tyolaji} ${String(num(l.maara)).replace('.', ',')} ${l.yksikko} × ${String(unitPrice(l, e.multiplier).toFixed(2)).replace('.', ',')} €`).join('\n')
@@ -176,6 +188,12 @@ export function buildWorkbook(ExcelJS, entries, settings, month) {
       h.value = client
       h.font = { name: FONT, size: 13, bold: true, color: { argb: BLUE } }
       r += 1
+      for (const line of clientInfoLines(clientFor(client, list))) {
+        ws.mergeCells(r, 1, r, cols.length)
+        ws.getCell(r, 1).value = line
+        ws.getCell(r, 1).font = { name: FONT, size: 9, color: { argb: 'FF475569' } }
+        r += 1
+      }
       for (const cls of ['kaannetty', 'alv']) {
         const g = inv[cls]
         if (!g) continue
@@ -319,10 +337,10 @@ export function buildWorkbook(ExcelJS, entries, settings, month) {
 }
 
 // Selaimessa: ExcelJS ladataan vasta kun nappia painetaan (ei kasvata sovellusta)
-export async function downloadWorkbook(entries, settings, month) {
+export async function downloadWorkbook(entries, settings, month, clients = [], sites = []) {
   const mod = await import('exceljs/dist/exceljs.min.js')
   const ExcelJS = mod.default || mod
-  const wb = buildWorkbook(ExcelJS, entries, settings, month)
+  const wb = buildWorkbook(ExcelJS, entries, settings, month, clients, sites)
   const buf = await wb.xlsx.writeBuffer()
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)

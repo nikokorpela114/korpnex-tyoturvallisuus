@@ -58,8 +58,50 @@ export function unitPrice(line, multiplier) {
   return round2(num(line.tes) * num(multiplier))
 }
 
+// Konsultointi ei ole rakentamispalvelua → aina alv. Muuten asiakkaan ALV-käsittely
+// (vat_mode 'alv' = asiakas ei myy rakentamispalveluja, esim. kuluttaja tai muu yritys).
 export function vatClass(e) {
-  return e.kind === 'konsultointi' ? 'alv' : 'kaannetty'
+  return e.kind === 'konsultointi' || e.vat_mode === 'alv' ? 'alv' : 'kaannetty'
+}
+
+// --- Kellonajat ---------------------------------------------------------------
+export const VAT_MODE_LABELS = {
+  kaannetty: 'Käännetty ALV (rakentamispalvelu, alv 0 %)',
+  alv: 'Normaali ALV 25,5 %',
+}
+export function timeToMin(t) {
+  if (!t) return null
+  const m = /^(\d{1,2})[:.](\d{2})/.exec(String(t))
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
+}
+export const fmtTime = t => (t ? String(t).slice(0, 5).replace(':', '.') : '')
+export function fmtDuration(min) {
+  const h = Math.floor(min / 60), m = min % 60
+  return m ? `${h} h ${m} min` : `${h} h`
+}
+// Työaika = loppu − alku − tauko, pyöristettynä lähimpään 15 minuuttiin.
+// Yön yli menevä vuoro (loppu < alku) lasketaan seuraavalle päivälle.
+export function calcHours(start, end, breakMin = 0) {
+  const a = timeToMin(start), b = timeToMin(end)
+  if (a === null || b === null) return null
+  let raw = b - a
+  if (raw <= 0) raw += 24 * 60
+  raw -= Number(breakMin) || 0
+  if (raw <= 0) return null
+  const rounded = Math.round(raw / 15) * 15
+  return { raw, rounded, hours: rounded / 60 }
+}
+// Päivärahaehdotus kodista kotiin -keston mukaan. Edellyttää yli 15 km
+// yhteen suuntaan, eli meno-paluu yli 30 km.
+export function suggestPerDiem(depart, ret, kmRoundTrip) {
+  const a = timeToMin(depart), b = timeToMin(ret)
+  if (a === null || b === null) return null
+  let dur = b - a
+  if (dur <= 0) dur += 24 * 60
+  if (num(kmRoundTrip) <= 30) return { dur, value: 'ei', reason: 'matka alle 15 km suuntaansa' }
+  if (dur > 600) return { dur, value: 'koko', reason: 'yli 10 h' }
+  if (dur > 360) return { dur, value: 'osa', reason: 'yli 6 h' }
+  return { dur, value: 'ei', reason: 'alle 6 h' }
 }
 
 export function entryTotals(e, settings = DEFAULT_SETTINGS) {
@@ -162,9 +204,20 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
   return out
 }
 
-export function invoiceText(clientName, invoice, settings = DEFAULT_SETTINGS) {
+export function clientInfoLines(client) {
+  if (!client) return []
+  return [
+    client.business_id && `Y-tunnus: ${client.business_id}`,
+    client.address && client.address.replace(/\n+/g, ', '),
+    client.einvoice && `Verkkolaskuosoite: ${client.einvoice}`,
+    client.email && `Sähköposti: ${client.email}`,
+  ].filter(Boolean)
+}
+
+export function invoiceText(clientName, invoice, settings = DEFAULT_SETTINGS, client = null) {
   const rows = []
   rows.push(`Lasku: ${clientName}`)
+  rows.push(...clientInfoLines(client))
   for (const cls of ['kaannetty', 'alv']) {
     const g = invoice[cls]
     if (!g) continue
