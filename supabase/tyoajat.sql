@@ -169,3 +169,51 @@ drop policy if exists "tt wl_trips own" on public.wl_trips;
 create policy "tt wl_trips own" on public.wl_trips for all
   using ((select tt_is_consultant()) and user_id = (select auth.uid()))
   with check ((select tt_is_consultant()) and user_id = (select auth.uid()));
+
+-- ---------------------------------------------------------------------------
+-- Päivä käynnissä (2026-10): työpäivä kirjataan napeilla lähdöstä kotiinpaluuseen.
+--   status 'kaynnissa' = päivä on vielä kesken (ei näy laskuilla eikä summissa),
+--   live = väliaikainen tila (esim. tauon alkuaika, kulkeeko omalla autolla).
+-- Laskutustila: billing 'laskutettava' | 'ei' (ei laskuteta, esim. oma työ).
+--   Laskutettu = invoiced_at asetettu; invoice_id linkittää laskuun (wl_invoices).
+-- ---------------------------------------------------------------------------
+alter table public.work_entries add column if not exists status text not null default 'valmis';
+alter table public.work_entries add column if not exists live jsonb;
+alter table public.work_entries add column if not exists billing text not null default 'laskutettava';
+do $$ begin
+  alter table public.work_entries add constraint work_entries_status_chk check (status in ('kaynnissa', 'valmis'));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.work_entries add constraint work_entries_billing_chk check (billing in ('laskutettava', 'ei'));
+exception when duplicate_object then null; end $$;
+create index if not exists work_entries_status_idx on public.work_entries(user_id, status) where status = 'kaynnissa';
+
+create table if not exists public.wl_invoices (
+  id             bigint generated always as identity primary key,
+  user_id        uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  client_name    text not null,
+  client_id      bigint references public.wl_clients(id) on delete set null,
+  invoice_number text,           -- esim. UKKO:n laskunumero (vapaaehtoinen)
+  invoice_date   date not null default current_date,
+  net            numeric not null default 0,   -- yhteensä alv 0
+  vat            numeric not null default 0,
+  notes          text,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+create index if not exists wl_invoices_user_date_idx on public.wl_invoices(user_id, invoice_date);
+alter table public.work_entries add column if not exists invoice_id bigint references public.wl_invoices(id) on delete set null;
+create index if not exists work_entries_invoice_idx on public.work_entries(invoice_id);
+
+drop trigger if exists tt_wl_invoices_touch on public.wl_invoices;
+create trigger tt_wl_invoices_touch before update on public.wl_invoices
+  for each row execute function public.tt_touch_updated_at();
+
+revoke all on public.wl_invoices from anon;
+grant select, insert, update, delete on public.wl_invoices to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+alter table public.wl_invoices enable row level security;
+drop policy if exists "tt wl_invoices own" on public.wl_invoices;
+create policy "tt wl_invoices own" on public.wl_invoices for all
+  using ((select tt_is_consultant()) and user_id = (select auth.uid()))
+  with check ((select tt_is_consultant()) and user_id = (select auth.uid()));

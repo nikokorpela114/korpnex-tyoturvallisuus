@@ -154,6 +154,157 @@ export function monthLabel(key) {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
+// --- Jaksot: viikko / kuukausi / vuosi ----------------------------------------
+const pad2 = n => String(n).padStart(2, '0')
+export const toISODate = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+const parseISO = s => new Date(String(s).slice(0, 10) + 'T12:00:00')
+export function addDays(dateStr, n) {
+  const d = parseISO(dateStr); d.setDate(d.getDate() + n); return toISODate(d)
+}
+// Viikon maanantai
+export function weekStart(dateStr) {
+  const d = parseISO(dateStr)
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+  return toISODate(d)
+}
+// ISO 8601 -viikkonumero (viikko, jolla on vuoden ensimmäinen torstai = vk 1)
+export function isoWeek(dateStr) {
+  const d = parseISO(dateStr)
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7)) // saman viikon torstai
+  const jan4 = new Date(d.getFullYear(), 0, 4, 12)
+  const week = 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getDay() + 6) % 7)) / 7)
+  return { year: d.getFullYear(), week }
+}
+export const PERIOD_LABELS = { week: 'Viikko', month: 'Kuukausi', year: 'Vuosi' }
+export function periodRange(mode, anchor) {
+  if (mode === 'week') { const from = weekStart(anchor); return { from, to: addDays(from, 6) } }
+  if (mode === 'year') { const y = String(anchor).slice(0, 4); return { from: `${y}-01-01`, to: `${y}-12-31` } }
+  return monthRange(monthKey(anchor))
+}
+export function shiftPeriod(mode, anchor, delta) {
+  if (mode === 'week') return addDays(weekStart(anchor), 7 * delta)
+  if (mode === 'year') return `${Number(String(anchor).slice(0, 4)) + delta}-01-15`
+  return `${shiftMonth(monthKey(anchor), delta)}-15`
+}
+const shortDate = s => { const d = parseISO(s); return `${d.getDate()}.${d.getMonth() + 1}.` }
+export function periodLabel(mode, anchor) {
+  if (mode === 'week') {
+    const { from, to } = periodRange('week', anchor)
+    return `Viikko ${isoWeek(from).week} · ${shortDate(from)}–${shortDate(to)}${to.slice(0, 4)}`
+  }
+  if (mode === 'year') return String(anchor).slice(0, 4)
+  return monthLabel(monthKey(anchor))
+}
+// Tiedostonimiin ja Excelin otsikoihin
+export function periodKey(mode, anchor) {
+  if (mode === 'week') { const w = isoWeek(weekStart(anchor)); return `${w.year}-vk${pad2(w.week)}` }
+  if (mode === 'year') return String(anchor).slice(0, 4)
+  return monthKey(anchor)
+}
+
+// --- Tunnit ja laskutustila ---------------------------------------------------
+// Työtunnit: tunti/konsultointi kirjatut tunnit, urakassa kellonajoista (tiedoksi)
+export function workHours(e) {
+  if (e.kind !== 'urakka') return num(e.hours)
+  const c = calcHours(e.start_time, e.end_time, e.break_minutes)
+  return c ? c.hours : 0
+}
+export const isBillable = e => e.billing !== 'ei'
+export const billingState = e => (e.billing === 'ei' ? 'ei' : e.invoiced_at ? 'laskutettu' : 'laskuttamatta')
+export const BILLING_LABELS = { laskuttamatta: 'Laskuttamatta', laskutettu: 'Laskutettu', ei: 'Ei laskuteta' }
+
+const spanMin = (a, b) => { const x = timeToMin(a), y = timeToMin(b); if (x === null || y === null) return null; let d = y - x; if (d <= 0) d += 1440; return d }
+// Matka-aika päivittäin: (paluu kotiin − lähtö kotoa) − työmailla vietetty aika.
+// Vain tiedoksi, matka-aikaa ei laskuteta.
+export function dayTravel(entries) {
+  const byDate = new Map()
+  for (const e of entries) {
+    if (!byDate.has(e.work_date)) byDate.set(e.work_date, [])
+    byDate.get(e.work_date).push(e)
+  }
+  const out = new Map()
+  for (const [date, list] of byDate) {
+    const deps = list.map(e => timeToMin(e.depart_time)).filter(x => x !== null)
+    const rets = list.map(e => timeToMin(e.return_time)).filter(x => x !== null)
+    if (!deps.length || !rets.length) continue
+    const dep = Math.min(...deps), ret = Math.max(...rets)
+    let away = ret - dep
+    if (away <= 0) away += 1440
+    const onSite = list.reduce((s, e) => s + (spanMin(e.start_time, e.end_time) || 0), 0)
+    out.set(date, { away, travel: Math.max(0, away - onSite) })
+  }
+  return out
+}
+
+// Jakson yhteenveto: palkit (viikko → päivät, kuukausi → viikot, vuosi → kuukaudet),
+// kokonaissummat ja asiakkaittainen jako.
+export function summarizePeriod(entries, settings, mode, anchor) {
+  const { from, to } = periodRange(mode, anchor)
+  const buckets = []
+  if (mode === 'week') {
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(from, i)
+      buckets.push({ key: d, label: parseISO(d).toLocaleDateString('fi-FI', { weekday: 'short' }), sub: shortDate(d), match: e => e.work_date === d })
+    }
+  } else if (mode === 'month') {
+    for (let w = weekStart(from); w <= to; w = addDays(w, 7)) {
+      const end = addDays(w, 6)
+      buckets.push({ key: w, label: `Vk ${isoWeek(w).week}`, sub: `${shortDate(w < from ? from : w)}–${shortDate(end > to ? to : end)}`, anchor: w, match: e => e.work_date >= w && e.work_date <= end })
+    }
+  } else {
+    const y = from.slice(0, 4)
+    for (let m = 1; m <= 12; m++) {
+      const k = `${y}-${pad2(m)}`
+      buckets.push({ key: k, label: new Date(Number(y), m - 1, 15).toLocaleDateString('fi-FI', { month: 'short' }).replace('.', ''), sub: '', anchor: `${k}-15`, match: e => e.work_date.slice(0, 7) === k })
+    }
+  }
+  const travel = dayTravel(entries)
+  const sumOf = list => {
+    const dates = new Set(list.map(e => e.work_date))
+    let travelMin = 0
+    for (const d of dates) travelMin += travel.get(d)?.travel || 0
+    const bill = list.filter(isBillable)
+    return {
+      hours: round2(list.reduce((s, e) => s + workHours(e), 0)),
+      travelH: round2(travelMin / 60),
+      km: round2(list.reduce((s, e) => s + num(e.km), 0)),
+      days: dates.size,
+      eur: round2(bill.reduce((s, e) => s + entryTotals(e, settings).total, 0)),
+      unbilled: round2(bill.filter(e => !e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0)),
+      billed: round2(bill.filter(e => e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0)),
+    }
+  }
+  const rows = buckets.map(b => ({ ...b, ...sumOf(entries.filter(b.match)), match: undefined }))
+  const clients = new Map()
+  for (const e of entries) {
+    if (!clients.has(e.client_name)) clients.set(e.client_name, [])
+    clients.get(e.client_name).push(e)
+  }
+  const byClient = [...clients.entries()].map(([name, list]) => ({ name, ...sumOf(list) }))
+    .sort((a, b) => b.hours - a.hours || b.eur - a.eur)
+  return { rows, total: sumOf(entries), byClient }
+}
+
+// Päivän kilometrien jako työmaille. legs: [{ known: km | null, weight }].
+// Tunnetut (mittarilukemista lasketut) pidetään, loput jaetaan painojen suhteessa
+// (työmaan km-tieto, tai tasan). Pyöristys kokonaisiin km, summa täsmää.
+export function allocateDayKm(legs, totalKm) {
+  const total = Math.max(0, Math.round(num(totalKm)))
+  const out = legs.map(l => (l.known != null ? Math.max(0, Math.round(num(l.known))) : null))
+  const knownSum = out.reduce((s, x) => s + (x || 0), 0)
+  const open = legs.map((l, i) => i).filter(i => out[i] === null)
+  if (!open.length) return out
+  const rest = Math.max(0, total - knownSum)
+  const w = open.map(i => (num(legs[i].weight) > 0 ? num(legs[i].weight) : 1))
+  const wSum = w.reduce((s, x) => s + x, 0)
+  let given = 0
+  open.forEach((i, j) => {
+    const v = j === open.length - 1 ? rest - given : Math.round(rest * w[j] / wSum)
+    out[i] = Math.max(0, v); given += out[i]
+  })
+  return out
+}
+
 export const fmtEur = n => (Number(n) || 0).toLocaleString('fi-FI', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
 export const fmtNum = (n, max = 2) => (Number(n) || 0).toLocaleString('fi-FI', { maximumFractionDigits: max })
 export const fmtDate = d => new Date(d + 'T12:00:00').toLocaleDateString('fi-FI')

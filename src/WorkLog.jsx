@@ -6,6 +6,10 @@
 //   2) Oma matkalasku → km-korvaukset + päivärahat (Korpnex maksaa verovapaasti)
 //   3) Materiaalien kulutus työmaittain (laskutettavat ja pelkkä seuranta)
 //   4) Kaikki kuukauden merkinnät, muokkaus, toisto ja arkistointi
+// Jakso valitaan: viikko / kuukausi / vuosi (tuntiyhteenveto WorkSummary.jsx).
+// "Päivä käynnissä" (DayFlow.jsx): työpäivä napeilla lähdöstä kotiinpaluuseen,
+// ajo ja työaika samassa kulussa, työmaan vaihto kesken päivän.
+// Laskutustila: laskuttamatta / laskutettu (lasku wl_invoices) / ei laskuteta.
 // Laskenta on src/worklog.js:ssä. Tietokanta: supabase/tyoajat.sql (RLS:
 // vain kirjautunut konsultti näkee omat rivinsä, asiakasportaalissa ei koskaan).
 // Näytetään omana osionaan WorkApp.jsx:ssä (/?tyoajat). Välilehdet: Kirjaukset,
@@ -19,13 +23,17 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS, KIND_LABELS, PER_DIEM_LABELS, UNITS, MATERIAL_UNITS,
   buildMaterialUsage, materialUsageText,
   num, round2, unitPrice, entryTotals, buildInvoice, invoiceText, buildTravelClaim, travelClaimText,
-  monthKey, monthRange, shiftMonth, monthLabel, fmtEur, fmtNum, fmtDate,
+  monthKey, monthLabel, fmtEur, fmtNum, fmtDate,
   calcHours, suggestPerDiem, isOpenTrip, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
+  periodRange, shiftPeriod, periodLabel, periodKey, PERIOD_LABELS,
+  isBillable, billingState, BILLING_LABELS, workHours, dayTravel,
 } from './worklog.js'
 import { downloadWorkbook } from './worklogXlsx.js'
 import WorkRegistry, { ClientModal, SiteModal } from './WorkRegistry.jsx'
 import { downloadUkkoTravelClaim } from './ukkoMatkalasku.js'
 import DriveLog, { TripModal, OpenTripBanner } from './DriveLog.jsx'
+import { DayStartModal, DayPanel, DAYFLOW_CSS } from './DayFlow.jsx'
+import WorkSummary, { SUMMARY_CSS } from './WorkSummary.jsx'
 
 const TYOLAJIT = ['Silikonin veto', 'Elastinen saumaus', 'Akryylisaumaus', 'Pohjanauha', 'Vanhan sauman poisto', 'Ikkunan tiivistys']
 
@@ -51,8 +59,23 @@ async function copyText(text) {
 }
 
 export default function WorkLog({ showToast }) {
-  const [month, setMonth] = useState(() => monthKey(new Date()))
+  // Jakso: viikko | kuukausi | vuosi, anchor = mikä tahansa päivä jaksolta
+  const [mode, setModeState] = useState(() => {
+    try { const m = localStorage.getItem('korpnex_tt_worklog_mode'); return PERIOD_LABELS[m] ? m : 'month' } catch { return 'month' }
+  })
+  const setMode = m => { setModeState(m); try { localStorage.setItem('korpnex_tt_worklog_mode', m) } catch { /* ok */ } }
+  const [anchor, setAnchor] = useState(todayISO)
+  const range = periodRange(mode, anchor)
+  const month = monthKey(anchor) // UKKO- ja Excel-viennit (kuukausi)
+  const pLabel = periodLabel(mode, anchor)
   const [entries, setEntries] = useState([])
+  // Päivä käynnissä: keskeneräiset kirjaukset (status 'kaynnissa') ja niiden ajot
+  const [live, setLive] = useState({ entries: [], trips: [] })
+  const [dayStart, setDayStart] = useState(false)
+  const [olderUnbilled, setOlderUnbilled] = useState([]) // aiempien jaksojen laskuttamattomat
+  const [invoices, setInvoices] = useState([])
+  const [invoiceModal, setInvoiceModal] = useState(null) // { client, list, cl }
+  const [filter, setFilter] = useState('kaikki') // kaikki | laskuttamatta | laskutettu | ei
   const [recent, setRecent] = useState([]) // asiakas-/työmaa-ehdotuksiin
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
@@ -76,6 +99,8 @@ export default function WorkLog({ showToast }) {
   const openNewRef = useRef(new URLSearchParams(window.location.search).has('uusi'))
   // ?ajo (kenttäsovelluksen valikosta): avaa ajon aloituksen tai lopetuksen
   const openTripRef = useRef(new URLSearchParams(window.location.search).has('ajo'))
+  // ?paiva (kenttäsovelluksen valikosta): aloittaa työpäivän tai näyttää käynnissä olevan
+  const openDayRef = useRef(new URLSearchParams(window.location.search).has('paiva'))
   const [trips, setTrips] = useState([])
   const [openTrip, setOpenTrip] = useState(null)
   const [lastOdo, setLastOdo] = useState(null)
@@ -83,8 +108,8 @@ export default function WorkLog({ showToast }) {
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
-    const { from, to } = monthRange(month)
-    const [m, r, c, st, tr, ot, lo] = await Promise.all([
+    const { from, to } = range
+    const [m, r, c, st, tr, ot, lo, lv, ou] = await Promise.all([
       sb.from('work_entries').select('*').eq('archived', false).gte('work_date', from).lte('work_date', to)
         .order('work_date', { ascending: false }).order('id', { ascending: false }),
       sb.from('work_entries').select('client_name, site, site_id, kind, hourly_rate, km, km_rate, km_billable, multiplier, start_time, end_time, break_minutes')
@@ -93,9 +118,27 @@ export default function WorkLog({ showToast }) {
       sb.from('wl_sites').select('*').order('name'),
       sb.from('wl_trips').select('*').eq('archived', false).gte('trip_date', from).lte('trip_date', to).order('trip_date').order('start_time'),
       sb.from('wl_trips').select('*').eq('archived', false).not('odo_start', 'is', null).is('odo_end', null).is('end_time', null)
-        .order('trip_date', { ascending: false }).limit(1),
+        .is('entry_id', null).order('trip_date', { ascending: false }).limit(1),
       sb.from('wl_trips').select('odo_end').eq('archived', false).not('odo_end', 'is', null).order('odo_end', { ascending: false }).limit(1),
+      sb.from('work_entries').select('*').eq('archived', false).eq('status', 'kaynnissa').order('id'),
+      sb.from('work_entries').select('*').eq('archived', false).is('invoiced_at', null).lt('work_date', from)
+        .order('work_date', { ascending: false }).limit(500),
     ])
+    // Käynnissä oleva päivä ja sen ajot (sarakkeita ei ole ennen tyoajat.sql:n päivitystä → ei päivää)
+    const liveEntries = lv.error ? [] : (lv.data || [])
+    let liveTrips = []
+    if (liveEntries.length) {
+      const lt = await sb.from('wl_trips').select('*').eq('archived', false).in('entry_id', liveEntries.map(e => e.id))
+      liveTrips = lt.error ? [] : (lt.data || [])
+    }
+    setLive({ entries: liveEntries, trips: liveTrips })
+    setOlderUnbilled(ou.error ? [] : (ou.data || []).filter(e => e.status !== 'kaynnissa' && isBillable(e)))
+    const doneEntries = (m.data || []).filter(e => e.status !== 'kaynnissa')
+    const invIds = [...new Set(doneEntries.map(e => e.invoice_id).filter(Boolean))]
+    if (invIds.length) {
+      const iv = await sb.from('wl_invoices').select('*').in('id', invIds).order('invoice_date', { ascending: false })
+      setInvoices(iv.error ? [] : (iv.data || []))
+    } else setInvoices([])
     const monthTrips = tr.error ? [] : (tr.data || [])
     setTrips(monthTrips)
     const open = ot.error ? null : (ot.data?.[0] || null)
@@ -111,7 +154,7 @@ export default function WorkLog({ showToast }) {
         ? 'Työajat-taulua ei löydy. Aja supabase/tyoajat.sql Supabasen SQL Editorissa.'
         : 'Työaikojen haku epäonnistui. Tarkista yhteys ja päivitä.')
       setEntries([])
-    } else setEntries(m.data || [])
+    } else setEntries(doneEntries)
     if (!r.error) setRecent(r.data || [])
     setLoading(false)
     if (openNewRef.current) {
@@ -130,8 +173,17 @@ export default function WorkLog({ showToast }) {
       const qs = p.toString().replace(/=(?=&|$)/g, '')
       try { window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '')) } catch { /* ei väliä */ }
     }
+    if (openDayRef.current) {
+      openDayRef.current = false
+      if (!liveEntries.length) setDayStart(true)
+      else setTimeout(() => document.getElementById('kx-day-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+      const p = new URLSearchParams(window.location.search)
+      p.delete('paiva')
+      const qs = p.toString().replace(/=(?=&|$)/g, '')
+      try { window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '')) } catch { /* ei väliä */ }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month])
+  }, [range.from, range.to])
   useEffect(() => { load() }, [load])
 
 
@@ -213,9 +265,12 @@ export default function WorkLog({ showToast }) {
     if (!base) d = withTrip(d, ctx)
     return withHours(d)
   }
-  function editDraft(e) {
+  // opts.finalize: Päivä käynnissä -kirjauksen tarkistus → tallennus merkitsee valmiiksi
+  function editDraft(e, opts = {}) {
     setDraft({
       ...e,
+      _finalize: !!opts.finalize,
+      _step: opts.step || '',
       hours: str(e.hours), hourly_rate: str(e.hourly_rate), multiplier: str(e.multiplier),
       km: str(e.km || ''), km_rate: str(e.km_rate), travel_hours: str(e.travel_hours || ''), travel_rate: str(e.travel_rate),
       lines: e.lines?.length ? e.lines.map(l => ({ ...l, maara: str(l.maara), tes: str(l.tes) })) : [emptyLine()],
@@ -319,14 +374,36 @@ export default function WorkLog({ showToast }) {
       return_time: d.return_time || null,
       notes: d.notes.trim() || null,
       invoiced_at: d.invoiced_at || null,
+      // Uudet sarakkeet vain kun niillä on merkitystä, jotta tallennus toimii myös
+      // ennen kuin tyoajat.sql on ajettu uudelleen
+      ...(d._finalize ? { status: 'valmis' } : {}),
+      ...(d.billing === 'ei' || 'billing' in d ? { billing: d.billing === 'ei' ? 'ei' : 'laskutettava' } : {}),
+      ...('invoice_id' in d ? { invoice_id: d.invoiced_at ? (d.invoice_id || null) : null } : {}),
     }
+  }
+
+  // Päivä käynnissä -kulun uusi kirjaus: työmaan (tai vapaan asiakkaan) hinnat ja ALV
+  function makeEntryRow(siteId, free) {
+    let d = newDraft(null, { trips: [] })
+    const site = siteId && sites.find(x => x.id === siteId)
+    if (site) d = applySite(d, site)
+    else d = { ...d, site_id: null, freeText: true, client_name: free?.client_name || '', site: free?.site || '', vat_mode: 'kaannetty', hourly_rate: str(settings.hourlyRate), km_rate: str(settings.kmRate), per_diem_billable: false }
+    return draftToRow({ ...d, notes: '' })
+  }
+  const liveIds = live.entries.map(e => e.id)
+  async function reviewDay(first) {
+    // Tuoreet tiedot kannasta (km-jako ja ajat päivittyivät juuri)
+    const { data } = await sb.from('work_entries').select('*').eq('id', first.id)
+    const n = live.entries.length, i = live.entries.findIndex(e => e.id === first.id)
+    editDraft(data?.[0] || first, { finalize: true, step: n > 1 && i >= 0 ? `${i + 1}/${n}` : '' })
   }
 
   async function save() {
     const row = draftToRow(draft)
     if (!row.work_date) { showToast('⚠ Valitse päivä'); return }
     if (!row.client_name) { showToast(draft.freeText ? '⚠ Kirjoita asiakas' : '⚠ Valitse työmaa'); return }
-    if (row.kind === 'urakka' ? !row.lines.length : !row.hours) {
+    const stillLive = draft.status === 'kaynnissa' && !draft._finalize // korjaus kesken päivän
+    if (!stillLive && (row.kind === 'urakka' ? !row.lines.length : !row.hours)) {
       showToast(row.kind === 'urakka' ? '⚠ Lisää vähintään yksi urakkarivi (määrä ja TES-hinta)' : '⚠ Kirjoita tunnit'); return
     }
     setSaving(true)
@@ -334,15 +411,33 @@ export default function WorkLog({ showToast }) {
       ? await sb.from('work_entries').update(row).eq('id', draft.id).select()
       : await sb.from('work_entries').insert([row]).select()
     setSaving(false)
-    if (res.error) { console.error('work_entries save failed:', res.error); showToast('⚠ Tallennus epäonnistui'); return }
-    showToast(draft.id ? '✓ Muutokset tallennettu' : '✓ Työpäivä kirjattu')
-    if (!draft.id) changeTab('kirjaukset')
+    if (res.error) {
+      console.error('work_entries save failed:', res.error)
+      showToast(/column|schema cache/i.test(res.error.message || '') ? '⚠ Tietokanta pitää päivittää: aja supabase/tyoajat.sql uudelleen' : '⚠ Tallennus epäonnistui')
+      return
+    }
     const saved = res.data?.[0]
     if (saved && !draft.id && draft._tripId) {
       await sb.from('wl_trips').update({ entry_id: saved.id }).eq('id', draft._tripId)
     }
+    // Liitetyn ajon km pysyy samana kuin työpäivän km (tarkistuksessa korjattu jako)
+    if (saved && draft._finalize) {
+      await sb.from('wl_trips').update({ km: num(saved.km) }).eq('entry_id', saved.id).eq('archived', false)
+    }
+    if (draft._finalize) {
+      const next = live.entries.find(e => e.id !== draft.id && e.status === 'kaynnissa')
+      if (next) {
+        showToast('✓ Tallennettu, tarkista vielä seuraava työmaa')
+        await reviewDay(next)
+        load()
+        return
+      }
+      showToast('✓ Työpäivä tallennettu')
+      changeTab('kirjaukset')
+    } else showToast(draft.id ? '✓ Muutokset tallennettu' : '✓ Työpäivä kirjattu')
+    if (!draft.id) changeTab('kirjaukset')
     setDraft(null)
-    if (saved && monthKey(saved.work_date) !== month) setMonth(monthKey(saved.work_date))
+    if (saved && (saved.work_date < range.from || saved.work_date > range.to)) setAnchor(saved.work_date)
     else load()
   }
 
@@ -364,11 +459,37 @@ export default function WorkLog({ showToast }) {
     showToast('🗑 Merkintä poistettu'); setDraft(null); load()
   }
 
-  async function markInvoiced(list, client) {
-    if (!window.confirm(`Merkitäänkö ${list.length} merkintää laskutetuksi (${client})?`)) return
-    const { error } = await sb.from('work_entries').update({ invoiced_at: new Date().toISOString() }).in('id', list.map(e => e.id))
-    if (error) { showToast('⚠ Tallennus epäonnistui'); return }
-    showToast('✓ Merkitty laskutetuksi'); load()
+  // Laskutetuksi merkintä: luo laskun (wl_invoices) numerolla ja päivällä ja linkittää
+  // päivät siihen. Jos taulua ei vielä ole, merkitään pelkkä laskutuspäivä kuten ennen.
+  async function markInvoiced({ list, client, cl, number, date }) {
+    const inv = buildInvoice(list, settings)
+    const net = round2((inv.kaannetty?.net || 0) + (inv.alv?.net || 0))
+    const vat = round2(inv.alv?.vat || 0)
+    const at = new Date(`${date}T12:00:00`).toISOString()
+    let invoiceId = null
+    const ins = await sb.from('wl_invoices').insert([{
+      client_name: client, client_id: cl?.id || null, invoice_number: (number || '').trim() || null,
+      invoice_date: date, net, vat,
+    }]).select()
+    if (!ins.error) invoiceId = ins.data?.[0]?.id ?? null
+    else console.warn('wl_invoices insert failed (aja tyoajat.sql):', ins.error)
+    const upd = invoiceId ? { invoiced_at: at, invoice_id: invoiceId } : { invoiced_at: at }
+    const { error } = await sb.from('work_entries').update(upd).in('id', list.map(e => e.id))
+    if (error) { showToast('⚠ Tallennus epäonnistui'); return false }
+    showToast(`✓ Merkitty laskutetuksi${number ? ` (lasku ${number})` : ''}`); load()
+    return true
+  }
+  async function cancelInvoice(invoice, list) {
+    if (!window.confirm(`Perutaanko laskutus${invoice?.invoice_number ? ` (lasku ${invoice.invoice_number})` : ''}? ${list.length} päivää palaa laskuttamattomiksi.`)) return
+    const ids = list.map(e => e.id)
+    const upd = 'invoice_id' in (list[0] || {}) ? { invoiced_at: null, invoice_id: null } : { invoiced_at: null }
+    const { error } = await sb.from('work_entries').update(upd).in('id', ids)
+    if (error) { showToast('⚠ Peruminen epäonnistui'); return }
+    if (invoice?.id) {
+      const { count } = await sb.from('work_entries').select('id', { count: 'exact', head: true }).eq('invoice_id', invoice.id)
+      if (!count) await sb.from('wl_invoices').delete().eq('id', invoice.id)
+    }
+    showToast('↩ Laskutus peruttu'); load()
   }
 
   async function downloadUkko() {
@@ -380,7 +501,7 @@ export default function WorkLog({ showToast }) {
     }
     setExporting(true)
     try {
-      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, month, trips)
+      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, periodKey(mode, anchor), trips)
       showToast('✓ UKKO-matkalasku ladattu')
     } catch (e) {
       console.error('ukko travel claim failed:', e)
@@ -392,7 +513,7 @@ export default function WorkLog({ showToast }) {
   async function downloadExcel() {
     setExporting(true)
     try {
-      await downloadWorkbook(entries, settings, month, clients, sites, trips)
+      await downloadWorkbook(entries, settings, { key: periodKey(mode, anchor), label: pLabel }, clients, sites, trips)
       showToast('✓ Excel ladattu')
     } catch (e) {
       console.error('xlsx export failed:', e)
@@ -404,19 +525,37 @@ export default function WorkLog({ showToast }) {
   // --- Kuukauden yhteenvedot -------------------------------------------------
   const byClient = useMemo(() => {
     const m = new Map()
-    for (const e of entries) {
+    for (const e of entries.filter(isBillable)) {
       const k = e.client_name
       if (!m.has(k)) m.set(k, [])
       m.get(k).push(e)
     }
     // Laskuttamattomat asiakkaat ensin, kokonaan laskutetut perään
-    const open = list => list.some(e => !e.invoiced_at) ? 0 : 1
+    const open = list => list.some(e => !e.invoiced_at && isBillable(e)) ? 0 : 1
     return [...m.entries()].sort((a, b) => open(a[1]) - open(b[1]) || a[0].localeCompare(b[0], 'fi'))
   }, [entries])
   const claim = useMemo(() => buildTravelClaim(entries, settings, trips), [entries, settings, trips])
   const usage = useMemo(() => buildMaterialUsage(entries), [entries])
-  const monthTotal = round2(entries.reduce((s, e) => s + entryTotals(e, settings).total, 0))
-  const unbilledTotal = round2(entries.filter(e => !e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0))
+  const monthTotal = round2(entries.filter(isBillable).reduce((s, e) => s + entryTotals(e, settings).total, 0))
+  const unbilledTotal = round2(entries.filter(e => !e.invoiced_at && isBillable(e)).reduce((s, e) => s + entryTotals(e, settings).total, 0))
+  const travelByDay = useMemo(() => dayTravel(entries), [entries])
+  const counts = useMemo(() => {
+    const c = { kaikki: entries.length, laskuttamatta: 0, laskutettu: 0, ei: 0 }
+    for (const e of entries) c[billingState(e)]++
+    return c
+  }, [entries])
+  const shown = filter === 'kaikki' ? entries : entries.filter(e => billingState(e) === filter)
+  // Aiempien jaksojen laskuttamattomat kuukausittain
+  const olderByMonth = useMemo(() => {
+    const m = new Map()
+    for (const e of olderUnbilled) {
+      const k = monthKey(e.work_date)
+      const cur = m.get(k) || { key: k, days: 0, eur: 0 }
+      cur.days++; cur.eur = round2(cur.eur + entryTotals(e, settings).total)
+      m.set(k, cur)
+    }
+    return [...m.values()]
+  }, [olderUnbilled, settings])
 
   const preview = draft ? entryTotals(draftToRow(draft), settings) : null
   const sameDay = draft && !draft.id ? entries.filter(e => e.work_date === draft.work_date) : []
@@ -429,11 +568,17 @@ export default function WorkLog({ showToast }) {
           <div className="kx-main-sub">Kirjaa työpäivät, tee laskurivit ja matkalasku. Näkyy vain sinulle.</div>
         </div>
         <div className="kx-main-head-actions kx-wl-headbtns">
-          {!openTrip && <button className="kx-btn-ghost" onClick={() => setTripModal({ mode: 'start', trip: null })}>🚗 Lähden ajoon</button>}
-          <button className="kx-btn-primary" onClick={() => setDraft(newDraft())}>＋ Kirjaa työpäivä</button>
+          {!live.entries.length && <button className="kx-btn-primary" onClick={() => setDayStart(true)}>▶ Aloita työpäivä</button>}
+          <button className={live.entries.length ? 'kx-btn-primary' : 'kx-btn-ghost'} onClick={() => setDraft(newDraft())}>＋ Kirjaa jälkikäteen</button>
         </div>
       </div>
 
+      <DayPanel
+        live={live} sites={sites} clients={clients} settings={settings} makeEntryRow={makeEntryRow} showToast={showToast}
+        onChanged={async (o = {}) => { await load(); if (o.review && live.entries[0]) reviewDay(live.entries[0]) }}
+        onReview={reviewDay}
+        onEdit={e => editDraft(e)}
+      />
       <OpenTripBanner trip={openTrip} onEnd={() => setTripModal({ mode: 'end', trip: openTrip })} />
 
       <div className="kx-wl-tabbar" role="tablist" aria-label="Työajat-näkymä">
@@ -457,11 +602,19 @@ export default function WorkLog({ showToast }) {
 
       {(tab === 'kirjaukset' || tab === 'laskutus' || tab === 'ajot') && <>
       <div className="kx-wl-monthbar">
-        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, -1))} aria-label="Edellinen kuukausi">‹</button>
-        <div className="kx-wl-month">{monthLabel(month)}</div>
-        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMonth(m => shiftMonth(m, 1))} aria-label="Seuraava kuukausi">›</button>
+        <div className="kx-wl-seg kx-wl-periodseg" role="radiogroup" aria-label="Jakso">
+          {Object.entries(PERIOD_LABELS).map(([k, l]) => (
+            <button key={k} role="radio" aria-checked={mode === k} className={mode === k ? 'active' : ''} onClick={() => setMode(k)}>{l}</button>
+          ))}
+        </div>
+        <div className="kx-wl-periodnav">
+          <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(a => shiftPeriod(mode, a, -1))} aria-label="Edellinen jakso">‹</button>
+          <div className="kx-wl-month">{pLabel}</div>
+          <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(a => shiftPeriod(mode, a, 1))} aria-label="Seuraava jakso">›</button>
+          {(todayISO() < range.from || todayISO() > range.to) && <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(todayISO())}>Tänään</button>}
+        </div>
         <div className="kx-wl-monthstats" style={tab !== 'laskutus' ? { display: 'none' } : undefined}>
-          <span><b>{fmtEur(monthTotal)}</b> kuukaudessa</span>
+          <span><b>{fmtEur(monthTotal)}</b> laskutettavaa</span>
           {unbilledTotal > 0 && unbilledTotal !== monthTotal && <span className="kx-wl-due">{fmtEur(unbilledTotal)} laskuttamatta</span>}
         </div>
       </div>
@@ -471,14 +624,15 @@ export default function WorkLog({ showToast }) {
 
       {!loading && !err && entries.length === 0 && tab !== 'ajot' && (
         <div className="kx-empty-note">
-          Ei {tab === 'laskutus' ? 'laskutettavaa' : 'merkintöjä'} kuukaudelle {monthLabel(month).toLowerCase()}.<br />
-          <button className="kx-btn-primary" style={{ marginTop: 12 }} onClick={() => setDraft(newDraft())}>＋ Kirjaa ensimmäinen työpäivä</button>
+          Ei {tab === 'laskutus' ? 'laskutettavaa' : 'merkintöjä'} jaksolla {pLabel.toLowerCase()}.<br />
+          {!live.entries.length && <button className="kx-btn-primary" style={{ marginTop: 12 }} onClick={() => setDayStart(true)}>▶ Aloita työpäivä</button>}
+          <button className="kx-btn-ghost" style={{ marginTop: 12, marginLeft: 8 }} onClick={() => setDraft(newDraft())}>＋ Kirjaa jälkikäteen</button>
         </div>
       )}
 
       {tab === 'ajot' && (
         <DriveLog
-          entries={entries} trips={trips} sites={sites} settings={settings}
+          entries={entries} trips={trips.filter(t => !liveIds.includes(t.entry_id))} sites={sites} settings={settings}
           openTrip={openTrip} exporting={exporting} onExcel={downloadExcel}
           onStartTrip={() => setTripModal({ mode: 'start', trip: null })}
           onNewTrip={() => setTripModal({ mode: 'new', trip: null })}
@@ -493,12 +647,25 @@ export default function WorkLog({ showToast }) {
       {tab === 'laskutus' && entries.length > 0 && (
         <div className="kx-card kx-wl-reports">
           <div>
-            <div className="kx-card-title" style={{ margin: 0 }}>Kuukauden raportit</div>
-            <div className="kx-main-sub">UKKO:n matkalaskupohja täytettynä ja koko kuukauden Excel-raportti</div>
+            <div className="kx-card-title" style={{ margin: 0 }}>Raportit · {pLabel}</div>
+            <div className="kx-main-sub">UKKO:n matkalaskupohja täytettynä ja koko jakson Excel-raportti</div>
           </div>
           <div className="kx-wl-actions">
             <button className="kx-btn-primary kx-btn-sm" onClick={downloadUkko} disabled={exporting}>⬇ UKKO-matkalasku</button>
             <button className="kx-btn-ghost kx-btn-sm" onClick={downloadExcel} disabled={exporting}>⬇ Excel-raportti</button>
+          </div>
+        </div>
+      )}
+
+      {tab === 'laskutus' && olderByMonth.length > 0 && (
+        <div className="kx-wl-warn kx-wl-older">
+          <div><b>Aiemmilta kuukausilta laskuttamatta {fmtEur(round2(olderByMonth.reduce((s, x) => s + x.eur, 0)))}</b></div>
+          <div className="kx-wl-actions" style={{ marginTop: 6 }}>
+            {olderByMonth.map(x => (
+              <button key={x.key} className="kx-btn-ghost kx-btn-sm" onClick={() => { setMode('month'); setAnchor(`${x.key}-15`) }}>
+                {monthLabel(x.key)}: {x.days} pv · {fmtEur(x.eur)} →
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -527,7 +694,7 @@ export default function WorkLog({ showToast }) {
               {unbilled.length > 0 && (
                 <div className="kx-wl-actions">
                   <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(invoiceText(client, inv, settings, cl)) ? '✓ Laskurivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 Kopioi laskurivit</button>
-                  <button className="kx-btn-ghost kx-btn-sm" onClick={() => markInvoiced(unbilled, client)}>✓ Merkitse laskutetuksi</button>
+                  <button className="kx-btn-ghost kx-btn-sm" onClick={() => setInvoiceModal({ list: unbilled, client, cl, number: '', date: todayISO() })}>✓ Merkitse laskutetuksi</button>
                 </div>
               )}
             </div>
@@ -569,6 +736,38 @@ export default function WorkLog({ showToast }) {
                 <div className="kx-hint">Mukana kopioiduissa laskuriveissä, jotta tilaaja voi laskuttaa materiaalit eteenpäin.</div>
               </div>
             )}
+            {(() => {
+              // Tämän jakson laskutetut päivät laskuittain
+              const billed = list.filter(e => e.invoiced_at)
+              if (!billed.length) return null
+              const groups = new Map()
+              for (const e of billed) {
+                const k = e.invoice_id || `d-${e.invoiced_at.slice(0, 10)}`
+                if (!groups.has(k)) groups.set(k, [])
+                groups.get(k).push(e)
+              }
+              return (
+                <div className="kx-wl-group">
+                  <div className="kx-wl-group-title">Laskutettu</div>
+                  <div className="kx-wl-matlist">
+                    {[...groups.entries()].map(([k, es]) => {
+                      const invc = invoices.find(x => x.id === k)
+                      const sum = round2(es.reduce((a, e) => a + entryTotals(e, settings).total, 0))
+                      return (
+                        <div key={k} className="kx-wl-invrow">
+                          <span>
+                            {invc?.invoice_number ? <b>Lasku {invc.invoice_number}</b> : 'Laskutettu'}
+                            {' '}{fmtDate((invc?.invoice_date || es[0].invoiced_at).slice(0, 10))} · {es.length} pv · {fmtEur(sum)}
+                            {invc && invc.net !== sum && <span className="kx-wl-period"> (koko lasku {fmtEur(invc.net)})</span>}
+                          </span>
+                          <button className="kx-wl-linkbtn" style={{ marginTop: 0, color: '#475569' }} onClick={() => cancelInvoice(invc, es)}>↩ Peru</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )
       })}
@@ -638,34 +837,54 @@ export default function WorkLog({ showToast }) {
       </>}
 
       {/* 4) Merkinnät */}
-      {tab === 'kirjaukset' && entries.length > 0 && (() => {
-        const hours = round2(entries.reduce((a, e) => a + (e.kind === 'urakka' ? 0 : num(e.hours)), 0))
-        const kmSum = round2(entries.reduce((a, e) => a + num(e.km), 0))
-        return (
-          <div className="kx-wl-stats">
-            <div><b>{entries.length}</b><span>työpäivää</span></div>
-            <div><b>{fmtNum(hours)} h</b><span>tunteja</span></div>
-            <div><b>{fmtNum(kmSum)} km</b><span>ajoa</span></div>
-            <button onClick={() => changeTab('laskutus')}><b>{fmtEur(unbilledTotal)}</b><span>laskuttamatta →</span></button>
-          </div>
-        )
-      })()}
+      {tab === 'kirjaukset' && entries.length > 0 && (
+        <WorkSummary entries={entries} settings={settings} mode={mode} anchor={anchor}
+          onDrill={a => { setMode(mode === 'year' ? 'month' : 'week'); setAnchor(a) }} />
+      )}
       {tab === 'kirjaukset' && entries.length > 0 && (
         <div className="kx-card">
           <div className="kx-wl-invoice-head">
             <div>
-              <div className="kx-card-title" style={{ margin: 0 }}>Merkinnät ({entries.length})</div>
+              <div className="kx-card-title" style={{ margin: 0 }}>Merkinnät ({shown.length})</div>
               <div className="kx-main-sub">Napauta merkintää muokataksesi tai poistaaksesi sen.</div>
             </div>
           </div>
+          <div className="kx-wl-chips" role="radiogroup" aria-label="Laskutustila">
+            {[['kaikki', 'Kaikki'], ['laskuttamatta', BILLING_LABELS.laskuttamatta], ['laskutettu', BILLING_LABELS.laskutettu], ['ei', BILLING_LABELS.ei]]
+              .filter(([k]) => k === 'kaikki' || counts[k] > 0 || filter === k)
+              .map(([k, l]) => (
+                <button key={k} role="radio" aria-checked={filter === k} className={`kx-wl-chip kx-wl-chip-${k}${filter === k ? ' active' : ''}`} onClick={() => setFilter(k)}>
+                  {l} <span>{counts[k]}</span>
+                </button>
+              ))}
+          </div>
+          {shown.length === 0 && <div className="kx-empty-note" style={{ padding: '14px 0 4px' }}>Ei merkintöjä tällä suodattimella.</div>}
           <div className="kx-wl-list">
-            {entries.map(e => {
+            {shown.map((e, i) => {
               const t = entryTotals(e, settings)
+              const st = billingState(e)
+              const tv = travelByDay.get(e.work_date)
+              // Väliotsikko: kuukausinäkymässä viikoittain, vuosinäkymässä kuukausittain
+              const groupKey = mode === 'year' ? monthKey(e.work_date) : mode === 'month' ? periodKey('week', e.work_date) : null
+              const prevKey = i > 0 ? (mode === 'year' ? monthKey(shown[i - 1].work_date) : mode === 'month' ? periodKey('week', shown[i - 1].work_date) : null) : undefined
+              let head = null
+              if (groupKey && groupKey !== prevKey) {
+                const grp = shown.filter(x => (mode === 'year' ? monthKey(x.work_date) : periodKey('week', x.work_date)) === groupKey)
+                const h = round2(grp.reduce((a, x) => a + workHours(x), 0))
+                head = (
+                  <div className="kx-wl-listhead">
+                    <span>{mode === 'year' ? monthLabel(groupKey) : periodLabel('week', e.work_date)}</span>
+                    <b>{fmtNum(h)} h</b>
+                  </div>
+                )
+              }
               const what = e.kind === 'urakka'
                 ? (e.lines || []).map(l => `${l.tyolaji} ${fmtNum(l.maara)} ${l.yksikko}`).join(', ')
                 : `${fmtNum(e.hours)} h × ${fmtEur(e.hourly_rate)}`
               return (
-                <div key={e.id} className="kx-wl-row">
+                <React.Fragment key={e.id}>
+                {head}
+                <div className="kx-wl-row">
                   <button className="kx-wl-row-main" onClick={() => editDraft(e)}>
                     <div className="kx-wl-date">{new Date(e.work_date + 'T12:00:00').toLocaleDateString('fi-FI', { weekday: 'short', day: 'numeric', month: 'numeric' })}</div>
                     <div className="kx-wl-row-body">
@@ -677,16 +896,19 @@ export default function WorkLog({ showToast }) {
                         {e.materials?.length > 0 && ` · ${e.materials.map(m => `${m.nimi} ${fmtNum(m.maara)} ${m.yksikko}`).join(', ')}`}
                         {num(e.km) > 0 && ` · ${fmtNum(e.km)} km${e.km_billable ? '' : ' (ei laskuteta)'}`}
                         {e.per_diem !== 'ei' && ` · ${PER_DIEM_LABELS[e.per_diem].toLowerCase()}${e.per_diem_billable ? ' (laskutetaan)' : ''}`}
+                        {tv?.travel > 0 && entries.filter(x => x.work_date === e.work_date)[0] === e && ` · matka-aika ${fmtDuration(tv.travel)}`}
                       </div>
                     </div>
                     <div className="kx-wl-row-sum">
-                      {fmtEur(t.total)}
-                      {e.invoiced_at && <span className="kx-wl-billed">laskutettu</span>}
+                      <span style={st === 'ei' ? { color: '#94a3b8', textDecoration: 'line-through' } : undefined}>{fmtEur(t.total)}</span>
+                      {e.kind === 'urakka' && workHours(e) > 0 && <span className="kx-wl-rowhours">{fmtNum(workHours(e))} h</span>}
+                      <span className={`kx-wl-billed kx-wl-billed-${st}`}>{BILLING_LABELS[st].toLowerCase()}</span>
                     </div>
                   </button>
                   <button className="kx-btn-ghost kx-btn-sm kx-wl-edit" onClick={() => editDraft(e)} aria-label="Muokkaa">✏️<span className="kx-wl-edit-label"> Muokkaa</span></button>
                   <button className="kx-icon-btn" title="Kirjaa samanlainen päivä tänään" aria-label="Kirjaa samanlainen päivä tänään" onClick={() => setDraft(newDraft(e))}>↻</button>
                 </div>
+                </React.Fragment>
               )
             })}
           </div>
@@ -738,7 +960,11 @@ export default function WorkLog({ showToast }) {
         <div className="kx-wl-overlay" onClick={() => !saving && setDraft(null)}>
           <div className="kx-wl-modal" onClick={e => e.stopPropagation()} role="dialog" aria-label={draft.id ? 'Muokkaa työpäivää' : 'Kirjaa työpäivä'}>
             <div className="kx-wl-modal-head">
-              <div className="kx-modal-title">{draft.id ? 'Muokkaa työpäivää' : 'Kirjaa työpäivä'}</div>
+              <div className="kx-modal-title">
+                {draft._finalize
+                  ? `📝 Tarkista työpäivä${draft._step ? ` (${draft._step})` : ''}`
+                  : draft.status === 'kaynnissa' ? 'Korjaa käynnissä olevaa päivää' : draft.id ? 'Muokkaa työpäivää' : 'Kirjaa työpäivä'}
+              </div>
               <button className="kx-icon-btn" onClick={() => setDraft(null)} aria-label="Sulje">✕</button>
             </div>
             {!draft.id && sameDay.length > 0 && (
@@ -751,6 +977,15 @@ export default function WorkLog({ showToast }) {
                   </div>
                 ))}
               </div>
+            )}
+            {draft._finalize && (
+              <div className="kx-wl-sameday">
+                Ajat ja kilometrit tulivat päivän kirjauksesta. Tarkista ne, {draft.kind === 'urakka' ? 'lisää urakkarivit' : 'katso tunnit'} ja materiaalit ja tallenna.
+                {draft._step && ' Kilometrit on jaettu työmaille, korjaa tarvittaessa.'}
+              </div>
+            )}
+            {draft.status === 'kaynnissa' && !draft._finalize && (
+              <div className="kx-wl-sameday">Päivä on vielä käynnissä. Tallennus korjaa tiedot, ja päivä jatkuu napeista.</div>
             )}
             {draft.invoiced_at && <div className="kx-wl-warn">Tämä päivä on jo merkitty laskutetuksi {fmtDate(draft.invoiced_at.slice(0, 10))}. Muutokset eivät päivity lähetettyyn laskuun.</div>}
 
@@ -926,14 +1161,17 @@ export default function WorkLog({ showToast }) {
                 <input type="checkbox" checked={draft.km_billable} onChange={e => setD('km_billable', e.target.checked)} />
                 Laskuta kilometrit asiakkaalta
               </label>
-              <label className="kx-wl-field">
-                <span>Matka-aika h</span>
-                <input className="kx-input" inputMode="decimal" placeholder="0" value={draft.travel_hours} onChange={e => setD('travel_hours', e.target.value)} />
-              </label>
-              <label className="kx-wl-field">
-                <span>Matka-ajan hinta €/h (0 = ei laskuteta)</span>
-                <input className="kx-input" inputMode="decimal" value={draft.travel_rate} onChange={e => setD('travel_rate', e.target.value)} />
-              </label>
+              {/* Matka-aikaa ei laskuteta; kentät näkyvät vain vanhoissa merkinnöissä, joissa niitä on käytetty */}
+              {(num(draft.travel_hours) > 0 || num(draft.travel_rate) > 0) && <>
+                <label className="kx-wl-field">
+                  <span>Matka-aika h</span>
+                  <input className="kx-input" inputMode="decimal" placeholder="0" value={draft.travel_hours} onChange={e => setD('travel_hours', e.target.value)} />
+                </label>
+                <label className="kx-wl-field">
+                  <span>Matka-ajan hinta €/h (0 = ei laskuteta)</span>
+                  <input className="kx-input" inputMode="decimal" value={draft.travel_rate} onChange={e => setD('travel_rate', e.target.value)} />
+                </label>
+              </>}
               <label className="kx-wl-field">
                 <span>Lähdin kotoa</span>
                 <input className="kx-input" type="time" step="300" value={draft.depart_time} onChange={e => setTime('depart_time', e.target.value)} />
@@ -970,13 +1208,27 @@ export default function WorkLog({ showToast }) {
                 <span>Lisätieto</span>
                 <input className="kx-input" placeholder="esim. B-rappu, ikkunat 3. krs" value={draft.notes} onChange={e => setD('notes', e.target.value)} />
               </label>
-              {draft.id && (
-                <label className="kx-checkbox-row kx-wl-wide" style={{ margin: 0 }}>
-                  <input type="checkbox" checked={!!draft.invoiced_at} onChange={e => setD('invoiced_at', e.target.checked ? new Date().toISOString() : null)} />
-                  Laskutettu
-                </label>
-              )}
+              {(() => {
+                const t = dayTravel([draftToRow(draft)]).get(draft.work_date)
+                return t && t.travel > 0 ? <div className="kx-wl-calc kx-wl-wide">Matka-aika {fmtDuration(t.travel)} <span>(tiedoksi, ei laskuteta)</span></div> : null
+              })()}
             </div>
+
+            {draft.status !== 'kaynnissa' && <>
+              <div className="kx-wl-section-title">Laskutus</div>
+              <div className="kx-wl-seg" role="radiogroup" aria-label="Laskutustila">
+                {['laskuttamatta', 'laskutettu', 'ei'].map(k => (
+                  <button key={k} role="radio" aria-checked={billingState(draft) === k} className={billingState(draft) === k ? 'active' : ''}
+                    onClick={() => setDraft(d => ({
+                      ...d,
+                      billing: k === 'ei' ? 'ei' : 'laskutettava',
+                      invoiced_at: k === 'laskutettu' ? (d.invoiced_at || new Date().toISOString()) : null,
+                      ...(k !== 'laskutettu' && 'invoice_id' in d ? { invoice_id: null } : {}),
+                    }))}>{BILLING_LABELS[k]}</button>
+                ))}
+              </div>
+              {billingState(draft) === 'ei' && <div className="kx-hint" style={{ marginTop: -6 }}>Ei näy laskuriveillä eikä laskutettavissa summissa. Tunnit, km:t ja päivärahat lasketaan silti.</div>}
+            </>}
 
             <div className="kx-wl-preview">
               <div>
@@ -995,7 +1247,42 @@ export default function WorkLog({ showToast }) {
             <div className="kx-modal-actions">
               {draft.id && <button className="kx-btn-ghost" style={{ marginRight: 'auto', color: '#b91c1c' }} onClick={() => archive(draft)}>🗑 Poista</button>}
               <button className="kx-btn-ghost" disabled={saving} onClick={() => setDraft(null)}>Peruuta</button>
-              <button className="kx-btn-primary" disabled={saving} onClick={save}>{saving ? 'Tallennetaan…' : draft.id ? 'Tallenna muutokset' : 'Kirjaa työpäivä'}</button>
+              <button className="kx-btn-primary" disabled={saving} onClick={save}>
+                {saving ? 'Tallennetaan…' : draft._finalize ? (liveIds.filter(id => id !== draft.id).length ? 'Tallenna ja seuraava' : '✓ Tallenna päivä') : draft.id ? 'Tallenna muutokset' : 'Kirjaa työpäivä'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {dayStart && (
+        <DayStartModal
+          sites={sites} clients={clients} settings={settings} lastOdo={lastOdo} lastSiteId={recent[0]?.site_id}
+          makeEntryRow={makeEntryRow} showToast={showToast}
+          onClose={() => setDayStart(false)}
+          onStarted={() => { setDayStart(false); load() }}
+        />
+      )}
+      {invoiceModal && (
+        <div className="kx-wl-overlay" onClick={() => setInvoiceModal(null)}>
+          <div className="kx-wl-modal" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()} role="dialog" aria-label="Merkitse laskutetuksi">
+            <div className="kx-wl-modal-head">
+              <div className="kx-modal-title">✓ Merkitse laskutetuksi</div>
+              <button className="kx-icon-btn" onClick={() => setInvoiceModal(null)} aria-label="Sulje">✕</button>
+            </div>
+            <div className="kx-wl-clientinfo">
+              <div><b>{invoiceModal.client}</b></div>
+              <div className="kx-wl-period">{invoiceModal.list.length} päivää · {fmtEur(round2(invoiceModal.list.reduce((a, e) => a + entryTotals(e, settings).total, 0)))} alv 0</div>
+            </div>
+            <div className="kx-wl-grid">
+              <label className="kx-wl-field"><span>Laskun numero (vapaaehtoinen)</span>
+                <input className="kx-input" placeholder="esim. UKKO:n laskunro" value={invoiceModal.number} autoFocus
+                  onChange={e => setInvoiceModal(x => ({ ...x, number: e.target.value }))} /></label>
+              <label className="kx-wl-field"><span>Laskun päivä</span>
+                <input className="kx-input" type="date" value={invoiceModal.date} onChange={e => setInvoiceModal(x => ({ ...x, date: e.target.value }))} /></label>
+            </div>
+            <div className="kx-modal-actions">
+              <button className="kx-btn-ghost" onClick={() => setInvoiceModal(null)}>Peruuta</button>
+              <button className="kx-btn-primary" disabled={!invoiceModal.date} onClick={async () => { if (await markInvoiced(invoiceModal)) setInvoiceModal(null) }}>✓ Merkitse laskutetuksi</button>
             </div>
           </div>
         </div>
@@ -1048,7 +1335,26 @@ export default function WorkLog({ showToast }) {
   )
 }
 
-export const WORKLOG_CSS = `
+export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
+.kx-wl-periodseg { flex: 0 0 auto; min-width: 250px; }
+.kx-wl-periodseg button { padding: 7px 10px; }
+.kx-wl-periodnav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kx-wl-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.kx-wl-chip { border: 1.5px solid #e3e8ef; background: #fff; color: #334155; border-radius: 999px; padding: 5px 12px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.kx-wl-chip span { color: #94a3b8; font-weight: 700; margin-left: 3px; }
+.kx-wl-chip.active { border-color: #0878E8; background: #eef5ff; color: #0a3d7a; }
+.kx-wl-chip:focus-visible { outline: 2px solid #0878E8; outline-offset: 2px; }
+.kx-wl-listhead { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 700; color: #475569; background: #f4f6fa; border-radius: 8px; padding: 6px 10px; margin-top: 8px; }
+.kx-wl-billed-laskuttamatta { color: #b45309 !important; }
+.kx-wl-billed-ei { color: #94a3b8 !important; }
+.kx-wl-rowhours { display: block; font-size: 11px; font-weight: 600; color: #64748b; }
+.kx-wl-invrow { align-items: center; }
+.kx-wl-older .kx-btn-ghost { background: #fff; }
+@media (max-width: 640px) {
+  .kx-wl-periodseg { width: 100%; min-width: 0; }
+  .kx-wl-periodnav { width: 100%; }
+}
+
 .kx-wl { display: flex; flex-direction: column; gap: 16px; max-width: 980px; }
 .kx-wl .kx-main-head { margin-bottom: 0; }
 .kx-wl-back { align-self: flex-start; background: #0a1428; color: #fff; border: none; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }

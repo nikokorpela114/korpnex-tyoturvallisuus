@@ -83,7 +83,8 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
   wb.creator = 'Korpnex Oy'
   wb.created = new Date()
   const sorted = [...entries].sort((a, b) => a.work_date.localeCompare(b.work_date) || a.id - b.id)
-  const mLabel = monthLabel(month)
+  // month: kuukausiavain '2026-10' tai jakso { key, label } (viikko / kuukausi / vuosi)
+  const mLabel = typeof month === 'object' && month ? month.label : monthLabel(month)
 
   // ---- 1) Työpäivät ----------------------------------------------------------
   {
@@ -175,7 +176,7 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
     title(ws, `Laskurivit · ${mLabel}`, 'Laskuttamattomat päivät asiakkaittain, kopioi UKKO:hon', cols.length)
     let r = 4
     const byClient = new Map()
-    for (const e of sorted.filter(e => !e.invoiced_at)) {
+    for (const e of sorted.filter(e => !e.invoiced_at && e.billing !== 'ei')) {
       if (!byClient.has(e.client_name)) byClient.set(e.client_name, [])
       byClient.get(e.client_name).push(e)
     }
@@ -390,7 +391,7 @@ export async function downloadWorkbook(entries, settings, month, clients = [], s
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `Korpnex-tyoajat-${month}.xlsx`
+  a.download = `Korpnex-tyoajat-${typeof month === 'object' && month ? month.key : month}.xlsx`
   document.body.appendChild(a); a.click(); a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 2000)
 }

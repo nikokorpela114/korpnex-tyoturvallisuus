@@ -63,7 +63,24 @@ lähtö/paluu kotiin -ajoista sovellus ehdottaa päivärahan.
 Erilliset ajot (esim. tarvikeostokset) menevät omaan matkalaskuun. Lukemien väli
 näytetään yksityisajona. Excel-raportissa oma Ajopäiväkirja-välilehti.
 
-Kenttäsovelluksen valikosta: 🚗 Lähden ajoon / ⏱ Kirjaa työpäivä / 🧾 Työajat & laskutus.
+Kenttäsovelluksen valikosta: ▶ Aloita työpäivä / ⏱ Kirjaa työpäivä jälkikäteen / 🚗 Erillinen ajo / 🧾 Työajat & laskutus.
 Käyttöönotto: aja `supabase/tyoajat.sql` SQL Editorissa. Oletushinnat
 (30 €/h, kerroin 1,75, 0,55 €/km, päivärahat 25 / 54 €) muutetaan näkymän
 alareunasta, ja ne tallentuvat laitteelle.
+
+### Päivä käynnissä, jaksot ja laskutustila (2026-10)
+
+Aja `supabase/tyoajat.sql` uudelleen (turvallinen ajaa monta kertaa): se lisää
+sarakkeet `status`, `live`, `billing`, `invoice_id` ja taulun `wl_invoices`.
+
+- **▶ Aloita työpäivä** (`/?tyoajat&paiva`): lähtö kotoa (mittarilukema) →
+  saavuin → tauko → (🔁 vaihdan työmaata) → työt loppui → kotona (loppulukema).
+  Km:t jaetaan työmaille, reitit ja päivärahaehdotus täyttyvät, ja lopuksi päivä
+  tarkistetaan tavallisella lomakkeella. Keskeneräinen päivä ei näy summissa.
+  Matka-aikaa ei laskuteta, se näkyy tunneissa tiedoksi.
+- **Viikko / Kuukausi / Vuosi**: tunnit palkkeina (päivät / viikot / kuukaudet),
+  matka-aika, km:t, laskutettavaa ja asiakkaittainen jako.
+- **Laskutustila**: laskuttamatta / laskutettu / ei laskuteta. "Merkitse laskutetuksi"
+  tallentaa laskun numeron ja päivän (`wl_invoices`), laskutuksen voi perua.
+  Laskutus-välilehti näyttää myös aiempien kuukausien laskuttamattomat.
+- **🚗 Erillinen ajo** (Ajot-välilehti) on ajoille ilman työpäivää, esim. tarvikeostokset.

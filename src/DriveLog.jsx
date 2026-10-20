@@ -1,6 +1,7 @@
 // src/DriveLog.jsx — Työajat: ajopäiväkirja (taulu wl_trips).
 //
-// Kulku: "🚗 Lähden ajoon" (alkulukema) → "🏁 Ajo päättyi" (loppulukema) →
+// Työpäivän ajot kirjataan Päivä käynnissä -kulussa (DayFlow.jsx). Tämä on erillinen ajo.
+// Kulku: "🚗 Erillinen ajo" (alkulukema) → "🏁 Ajo päättyi" (loppulukema) →
 // km = loppu − alku. Jos samalle päivälle on työpäivä, ajo liitetään siihen ja
 // työpäivän km:t (ja lähtö/paluuajat, jos tyhjiä) päivittyvät. Muuten ajo jää
 // erilliseksi ajoksi ja menee suoraan omaan matkalaskuun. Peräkkäisten
@@ -140,7 +141,7 @@ export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClo
     showToast('🗑 Ajo poistettu'); onSaved(null, {})
   }
 
-  const title = { start: '🚗 Lähden ajoon', end: '🏁 Ajo päättyi', edit: 'Muokkaa ajoa', new: 'Lisää ajo jälkikäteen' }[mode]
+  const title = { start: '🚗 Erillinen ajo', end: '🏁 Ajo päättyi', edit: 'Muokkaa ajoa', new: 'Lisää ajo jälkikäteen' }[mode]
   return (
     <div className="kx-wl-overlay" onClick={() => !saving && onClose()}>
       <div className="kx-wl-modal" onClick={e => e.stopPropagation()} role="dialog" aria-label={title}>
@@ -260,15 +261,15 @@ export default function DriveLog({ entries, trips, sites, settings, onEditTrip, 
       </div>
 
       <div className="kx-wl-actions">
-        {!openTrip && <button className="kx-btn-primary kx-btn-sm" onClick={onStartTrip}>🚗 Lähden ajoon</button>}
+        {!openTrip && <button className="kx-btn-ghost kx-btn-sm" onClick={onStartTrip} title="Ajo ilman työpäivää, esim. tarvikeostokset">🚗 Erillinen ajo</button>}
         <button className="kx-btn-ghost kx-btn-sm" onClick={onNewTrip}>＋ Lisää ajo jälkikäteen</button>
         <button className="kx-btn-ghost kx-btn-sm" onClick={onExcel} disabled={exporting} style={{ marginLeft: 'auto' }}>⬇ Ajopäiväkirja (Excel)</button>
       </div>
 
       {log.rows.length === 0 ? (
         <div className="kx-empty-note">
-          Ei ajoja tässä kuussa. Paina <b>🚗 Lähden ajoon</b>, kun lähdet työajoon, ja kirjaa mittarilukema.
-          Työpäivien kilometrit näkyvät täällä automaattisesti.
+          Ei ajoja tällä jaksolla. Työpäivän ajot kirjautuvat tänne automaattisesti, kun aloitat päivän napista <b>▶ Aloita työpäivä</b>.
+          Muut työajot (esim. tarvikeostokset) kirjaat napista <b>🚗 Erillinen ajo</b>.
         </div>
       ) : (
         <div className="kx-card">
