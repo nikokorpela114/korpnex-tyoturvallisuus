@@ -44,7 +44,32 @@ export function saveSettings(s) {
 
 export const KIND_LABELS = { tunti: 'Tuntityö', urakka: 'Urakka', konsultointi: 'Konsultointi' }
 export const PER_DIEM_LABELS = { ei: 'Ei päivärahaa', osa: 'Osapäiväraha', koko: 'Kokopäiväraha' }
-export const UNITS = ['m', 'm²', 'kpl', 'h']
+export const UNITS = ['jm', 'm', 'm²', 'kpl', 'h']
+
+// Saumaustyöt-nimikkeet ja TES-hinnat 2026 (samat kuin Zaumaxin Urakka-sovelluksen hinnastossa).
+// Valinta täyttää työlajin, yksikön ja TES-hinnan; hintaa voi muuttaa rivillä.
+export const TES_NIMIKKEET = [
+  ['Elementti- ja ikkunasauma', [
+    ['Elementti- ja ikkunasauma 0…20 mm', 'jm', 1.61], ['Elementti- ja ikkunasauma 21…30 mm', 'jm', 2.07],
+    ['Elementti- ja ikkunasauma 31…40 mm', 'jm', 2.61], ['Elementti- ja ikkunasauma 41…50 mm', 'jm', 3.01],
+    ['Elementti- ja ikkunasauma yli 50 mm', 'jm', 3.61],
+  ]],
+  ['Ikkunasauma', [['Ikkunasauma 0…15 mm', 'jm', 1.67], ['Ikkunasauma 16…25 mm', 'jm', 1.80], ['Ikkunasauma 26…35 mm', 'jm', 3.01]]],
+  ['Graniitin saumaus', [['Graniitin saumaus 0…15 mm', 'jm', 1.88]]],
+  ['Silikonisaumaus', [['Silikonisaumaus 0…10 mm', 'jm', 1.07], ['Silikonisaumaus 11…15 mm', 'jm', 1.21]]],
+  ['Akryylisaumaus', [['Akryylisaumaus 0…10 mm', 'jm', 1.00], ['Akryylisaumaus 11…15 mm', 'jm', 1.13]]],
+  ['Vaahdotus', [['Vaahdotus 0…20 mm', 'jm', 0.94], ['Vaahdotus, leikattuna yli 20 mm', 'jm', 1.13]]],
+  ['Läpimenot', [
+    ['Läpimeno, kevyet väliseinät 0…100 mm', 'kpl', 0.60], ['Läpimeno, kevyet väliseinät 100…300 mm', 'kpl', 0.80],
+    ['Läpimeno, kevyet väliseinät 300…500 mm', 'kpl', 1.00], ['Läpimeno, tiiliseinät 0…100 mm', 'kpl', 0.87],
+    ['Läpimeno, tiiliseinät 100…300 mm', 'kpl', 1.13], ['Läpimeno, tiiliseinät 300…500 mm', 'kpl', 2.55],
+  ]],
+  ['Uusintasaumaus', [['Uusintasaumaus, elementit', 'jm', 3.61]]],
+]
+export const findNimike = name => {
+  for (const [, items] of TES_NIMIKKEET) for (const it of items) if (it[0] === name) return { label: it[0], unit: it[1], tes: it[2] }
+  return null
+}
 export const MATERIAL_UNITS = ['kpl', 'm', 'jm', 'l', 'rll', 'pkt', 'm²', 'kg']
 
 
@@ -59,7 +84,9 @@ export const num = v => {
   return isFinite(x) ? x : 0
 }
 
+// Urakkarivi: TES-hinta × kerroin. Tuntirivi (hourly, esim. siivous urakan ohessa): €/h sellaisenaan.
 export function unitPrice(line, multiplier) {
+  if (line.hourly) return round2(num(line.tes))
   return round2(num(line.tes) * num(multiplier))
 }
 
