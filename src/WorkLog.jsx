@@ -20,7 +20,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { sb } from './supabaseClient.js'
 import {
-  loadSettings, saveSettings, DEFAULT_SETTINGS, KIND_LABELS, PER_DIEM_LABELS, UNITS, MATERIAL_UNITS,
+  loadSettings, saveSettings, DEFAULT_SETTINGS, KIND_LABELS, PER_DIEM_LABELS, UNITS, MATERIAL_UNITS, TES_NIMIKKEET, findNimike,
   buildMaterialUsage, materialUsageText,
   num, round2, unitPrice, entryTotals, buildInvoice, invoiceText, buildTravelClaim, travelClaimText,
   monthKey, monthLabel, fmtEur, fmtNum, fmtDate,
@@ -44,7 +44,8 @@ const todayISO = () => {
 const str = v => (v === null || v === undefined ? '' : String(v).replace('.', ','))
 const hhmm = t => (t ? String(t).slice(0, 5) : '')
 const BREAK_MIN = 30
-const emptyLine = () => ({ tyolaji: '', maara: '', yksikko: 'm', tes: '' })
+const emptyLine = () => ({ tyolaji: '', maara: '', yksikko: 'jm', tes: '' })
+const TUNTILAJIT = ['Siivous', 'Kiireapu', 'Valmistelutyöt', 'Odotus', 'Tuntityö']
 const emptyMaterial = () => ({ nimi: '', maara: '', yksikko: 'kpl' })
 const MATERIAALIT = ['Silikoni', 'Elastinen saumausmassa', 'Akryylimassa', 'Pohjanauha', 'Primer', 'Puhdistusaine', 'Maalarinteippi']
 
@@ -343,6 +344,24 @@ export default function WorkLog({ showToast }) {
   }
   const setMat = (i, k, v) => setDraft(d => ({ ...d, materials: d.materials.map((m, j) => j === i ? { ...m, [k]: v } : m) }))
   const setLine = (i, k, v) => setDraft(d => ({ ...d, lines: d.lines.map((l, j) => j === i ? { ...l, [k]: v } : l) }))
+  // Nimikkeen valinta täyttää työlajin, yksikön ja TES-hinnan
+  function pickNimike(i, v) {
+    setDraft(d => ({
+      ...d,
+      lines: d.lines.map((l, j) => {
+        if (j !== i) return l
+        if (v === '__custom') return { ...l, _custom: true, tyolaji: findNimike(l.tyolaji) ? '' : l.tyolaji }
+        const n = findNimike(v)
+        return n ? { ...l, _custom: false, tyolaji: n.label, yksikko: n.unit, tes: str(n.tes) } : { ...l, _custom: false, tyolaji: '' }
+      }),
+    }))
+  }
+  // Tuntirivi urakan ohessa (esim. siivous): tuntihinta oletuksena asiakkaan €/h
+  const emptyHourLine = () => {
+    const site = draft?.site_id && sites.find(x => x.id === draft.site_id)
+    const rate = (site && clientById(site.client_id)?.hourly_rate) || num(draft?.hourly_rate) || settings.hourlyRate
+    return { tyolaji: '', maara: '', yksikko: 'h', tes: str(rate), hourly: true }
+  }
 
   function draftToRow(d) {
     return {
@@ -353,7 +372,9 @@ export default function WorkLog({ showToast }) {
       hours: d.kind === 'urakka' ? 0 : num(d.hours),
       hourly_rate: d.kind === 'urakka' ? 0 : num(d.hourly_rate),
       lines: d.kind === 'urakka'
-        ? d.lines.filter(l => num(l.maara) && num(l.tes)).map(l => ({ tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'm', tes: num(l.tes) }))
+        ? d.lines.filter(l => num(l.maara) && num(l.tes)).map(l => l.hourly
+          ? { tyolaji: (l.tyolaji || '').trim() || 'Tuntityö', maara: num(l.maara), yksikko: 'h', tes: num(l.tes), hourly: true }
+          : { tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'jm', tes: num(l.tes) })
         : [],
       multiplier: num(d.multiplier) || DEFAULT_SETTINGS.multiplier,
       materials: (d.materials || []).filter(m => (m.nimi || '').trim() && num(m.maara))
@@ -404,7 +425,7 @@ export default function WorkLog({ showToast }) {
     if (!row.client_name) { showToast(draft.freeText ? '⚠ Kirjoita asiakas' : '⚠ Valitse työmaa'); return }
     const stillLive = draft.status === 'kaynnissa' && !draft._finalize // korjaus kesken päivän
     if (!stillLive && (row.kind === 'urakka' ? !row.lines.length : !row.hours)) {
-      showToast(row.kind === 'urakka' ? '⚠ Lisää vähintään yksi urakkarivi (määrä ja TES-hinta)' : '⚠ Kirjoita tunnit'); return
+      showToast(row.kind === 'urakka' ? '⚠ Lisää vähintään yksi urakka- tai tuntirivi (määrä ja hinta)' : '⚠ Kirjoita tunnit'); return
     }
     setSaving(true)
     const res = draft.id
@@ -1091,21 +1112,36 @@ export default function WorkLog({ showToast }) {
             ) : (
               <div className="kx-wl-lines">
                 <datalist id="kx-wl-tyolajit">{TYOLAJIT.map(t => <option key={t} value={t} />)}</datalist>
+                <datalist id="kx-wl-tuntilajit">{TUNTILAJIT.map(t => <option key={t} value={t} />)}</datalist>
                 <div className="kx-wl-line kx-wl-line-head" aria-hidden="true">
-                  <span className="kx-wl-line-name">Työlaji</span><span>Määrä</span><span>Yks.</span><span>TES €/yks.</span><span>Laskutus</span>
+                  <span className="kx-wl-line-name">Nimike</span><span>Määrä</span><span>Yks.</span><span>TES €/yks.</span><span>Laskutus</span>
                 </div>
                 {draft.lines.map((l, i) => {
+                  if (l.hourly) return null
                   const p = unitPrice(l, draft.multiplier)
+                  const known = findNimike(l.tyolaji)
+                  const custom = l._custom || (!known && !!l.tyolaji)
                   return (
                     <div key={i} className="kx-wl-line">
-                      <input className="kx-input kx-input-sm kx-wl-line-name" list="kx-wl-tyolajit" placeholder="Työlaji" value={l.tyolaji} onChange={e => setLine(i, 'tyolaji', e.target.value)} />
+                      <div className="kx-wl-line-name kx-wl-line-pick">
+                        <select className="kx-input kx-input-sm" aria-label="Nimike" value={custom ? '__custom' : (known ? known.label : '')} onChange={e => pickNimike(i, e.target.value)}>
+                          <option value="">— Valitse nimike —</option>
+                          {TES_NIMIKKEET.map(([g, items]) => (
+                            <optgroup key={g} label={g}>
+                              {items.map(([name, unit, tes]) => <option key={name} value={name}>{name} · {fmtEur(tes)}/{unit}</option>)}
+                            </optgroup>
+                          ))}
+                          <option value="__custom">✏️ Muu työlaji (kirjoita)</option>
+                        </select>
+                        {custom && <input className="kx-input kx-input-sm" list="kx-wl-tyolajit" placeholder="Työlaji" value={l.tyolaji} autoFocus={l._custom && !l.tyolaji} onChange={e => setLine(i, 'tyolaji', e.target.value)} />}
+                      </div>
                       <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="Määrä" aria-label="Määrä" value={l.maara} onChange={e => setLine(i, 'maara', e.target.value)} />
                       <select className="kx-input kx-input-sm" aria-label="Yksikkö" value={l.yksikko} onChange={e => setLine(i, 'yksikko', e.target.value)}>
-                        {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                        {(UNITS.includes(l.yksikko) ? UNITS : [l.yksikko, ...UNITS]).map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                       <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="TES €" aria-label="TES-hinta €/yksikkö" value={l.tes} onChange={e => setLine(i, 'tes', e.target.value)} />
                       <div className="kx-wl-line-calc">{p ? `${fmtEur(p)}/${l.yksikko} · ${fmtEur(round2(num(l.maara) * p))}` : '–'}</div>
-                      {draft.lines.length > 1 && <button className="kx-icon-btn" aria-label="Poista rivi" onClick={() => setD('lines', draft.lines.filter((_, j) => j !== i))}>✕</button>}
+                      {draft.lines.filter(x => !x.hourly).length > 1 && <button className="kx-icon-btn" aria-label="Poista rivi" onClick={() => setD('lines', draft.lines.filter((_, j) => j !== i))}>✕</button>}
                     </div>
                   )
                 })}
@@ -1117,6 +1153,30 @@ export default function WorkLog({ showToast }) {
                   </label>
                 </div>
                 <div className="kx-hint">TES-hinta laskimesta (teslaskin.mittaviiva.fi) × kerroin = laskutushinta.</div>
+
+                <div className="kx-wl-section-title" style={{ marginTop: 6 }}>Tuntityö urakan lisäksi</div>
+                {draft.lines.some(l => l.hourly) && (
+                  <div className="kx-wl-line kx-wl-hourline kx-wl-line-head" aria-hidden="true">
+                    <span className="kx-wl-line-name">Mitä tehtiin</span><span>Tunnit</span><span>€/h</span><span>Laskutus</span>
+                  </div>
+                )}
+                {draft.lines.map((l, i) => {
+                  if (!l.hourly) return null
+                  const p = unitPrice(l, draft.multiplier)
+                  return (
+                    <div key={i} className="kx-wl-line kx-wl-hourline">
+                      <input className="kx-input kx-input-sm kx-wl-line-name" list="kx-wl-tuntilajit" placeholder="esim. Siivous" value={l.tyolaji} onChange={e => setLine(i, 'tyolaji', e.target.value)} />
+                      <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="h" aria-label="Tunnit" value={l.maara} onChange={e => setLine(i, 'maara', e.target.value)} />
+                      <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="€/h" aria-label="Tuntihinta" value={l.tes} onChange={e => setLine(i, 'tes', e.target.value)} />
+                      <div className="kx-wl-line-calc">{p && num(l.maara) ? `${fmtNum(num(l.maara))} h × ${fmtEur(p)} = ${fmtEur(round2(num(l.maara) * p))}` : 'tunnit × €/h'}</div>
+                      <button className="kx-icon-btn" aria-label="Poista tuntirivi" onClick={() => setD('lines', draft.lines.filter((_, j) => j !== i))}>✕</button>
+                    </div>
+                  )
+                })}
+                <div className="kx-wl-lines-foot">
+                  <button className="kx-btn-ghost kx-btn-sm" onClick={() => setD('lines', [...draft.lines, emptyHourLine()])}>＋ Tunteja (esim. siivous)</button>
+                </div>
+                {draft.lines.some(l => l.hourly) && <div className="kx-hint">Tuntirivit laskutetaan tuntihinnalla ilman urakan kerrointa, samalla laskulla urakan kanssa.</div>}
               </div>
             )}
 
@@ -1448,6 +1508,9 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
 .kx-wl-lines { display: flex; flex-direction: column; gap: 8px; }
 .kx-wl-line { display: grid; grid-template-columns: minmax(0, 2fr) 76px 64px 76px minmax(0, 1.4fr) 28px; gap: 6px; align-items: center; }
 .kx-wl-line.kx-wl-mat { grid-template-columns: minmax(0, 1fr) 90px 110px 28px; }
+.kx-wl-line.kx-wl-hourline { grid-template-columns: minmax(0, 2fr) 76px 76px minmax(0, 1fr) 28px; }
+.kx-wl-line-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kx-wl-line-pick select { min-width: 0; width: 100%; }
 .kx-wl-line.kx-wl-mat > .kx-icon-btn { grid-row: auto; grid-column: auto; }
 .kx-wl-line-head { font-size: 11.5px; font-weight: 600; color: #64748b; margin-bottom: -4px; }
 .kx-wl-line-head > span:last-child { grid-column: span 2; }
@@ -1464,6 +1527,10 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
   .kx-wl-month { min-width: 0; flex: 1; }
   .kx-wl-line { grid-template-columns: 1fr 1fr 1fr 28px; }
   .kx-wl-line.kx-wl-mat { grid-template-columns: 1fr 1fr 28px; }
+  .kx-wl-line.kx-wl-hourline { grid-template-columns: 1fr 1fr 1fr 28px; }
+  .kx-wl-hourline .kx-wl-line-calc { grid-column: auto; margin-top: 0; }
+  .kx-wl-line.kx-wl-hourline > .kx-icon-btn { grid-row: 2; grid-column: 4; }
+  .kx-wl-line + .kx-wl-line { margin-top: 6px; }
   .kx-wl-line.kx-wl-mat .kx-wl-line-name { grid-column: 1 / -1; }
   .kx-wl-line.kx-wl-mat + .kx-wl-line.kx-wl-mat { margin-top: 6px; }
   .kx-wl-line-name { grid-column: 1 / -1; }
