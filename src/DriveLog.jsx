@@ -108,7 +108,8 @@ export function TripModal({ mode, trip, sites, clients, settings, lastOdo, onClo
       start_time: d.start_time || null,
       end_time: showEnd ? (d.end_time || null) : null,
       odo_start: s0,
-      odo_end: showEnd ? s1 : null,
+      // Pelkät km alkulukeman kanssa → loppulukema = alku + km (seuraava lähtö vertaa tähän)
+      odo_end: showEnd ? (s1 ?? (s0 != null && num(d.km) > 0 ? s0 + Math.round(num(d.km)) : null)) : null,
       km: odoKm != null ? odoKm : (num(d.km) || null),
       site_id: d.site_id ? Number(d.site_id) : null,
       client_name: client?.name || trip?.client_name || null,

@@ -120,7 +120,7 @@ export default function WorkLog({ showToast }) {
       sb.from('wl_trips').select('*').eq('archived', false).gte('trip_date', from).lte('trip_date', to).order('trip_date').order('start_time'),
       sb.from('wl_trips').select('*').eq('archived', false).not('odo_start', 'is', null).is('odo_end', null).is('end_time', null)
         .is('entry_id', null).order('trip_date', { ascending: false }).limit(1),
-      sb.from('wl_trips').select('odo_end').eq('archived', false).not('odo_end', 'is', null).order('odo_end', { ascending: false }).limit(1),
+      sb.from('wl_trips').select('odo_start, odo_end, km').eq('archived', false).not('odo_start', 'is', null).order('odo_start', { ascending: false }).limit(10),
       sb.from('work_entries').select('*').eq('archived', false).eq('status', 'kaynnissa').order('id'),
       sb.from('work_entries').select('*').eq('archived', false).is('invoiced_at', null).lt('work_date', from)
         .order('work_date', { ascending: false }).limit(500),
@@ -144,7 +144,9 @@ export default function WorkLog({ showToast }) {
     setTrips(monthTrips)
     const open = ot.error ? null : (ot.data?.[0] || null)
     setOpenTrip(open)
-    setLastOdo(lo.error ? null : (lo.data?.[0]?.odo_end ?? null))
+    // Viimeisin tunnettu mittarilukema: loppulukema, tai alkulukema + km jos ajo kirjattiin pelkillä km:illä
+    const odoReadings = (lo.error ? [] : (lo.data || [])).map(t => t.odo_end ?? (num(t.km) > 0 ? t.odo_start + Math.round(num(t.km)) : t.odo_start))
+    setLastOdo(odoReadings.length ? Math.max(...odoReadings) : null)
     const regClients = c.error ? [] : (c.data || [])
     const regSites = st.error ? [] : (st.data || [])
     if (!c.error) setClients(regClients)

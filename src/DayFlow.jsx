@@ -321,7 +321,10 @@ function HomeModal({ live, sites, settings, onClose, onDone, showToast }) {
         if (isLast) parts.push(home)
         await sb.from('wl_trips').update({
           km: kms[i], route: parts.filter(Boolean).join(SEP),
-          end_time: isLast ? d.time : (t.end_time || end), odo_end: isLast ? odo : t.odo_end,
+          end_time: isLast ? d.time : (t.end_time || end),
+          // Jos loppulukemaa ei kirjoitettu (vain km), lasketaan se: alkulukema + km.
+          // Muuten seuraavan päivän lähtölukema näyttäisi työajot yksityisajona.
+          odo_end: (isLast ? odo : t.odo_end) ?? (t.odo_start != null && kms[i] > 0 ? t.odo_start + kms[i] : null),
         }).eq('id', t.id)
       }
     }
