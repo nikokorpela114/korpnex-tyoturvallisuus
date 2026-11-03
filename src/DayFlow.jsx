@@ -13,7 +13,12 @@
 // Matka-aikaa ei laskuteta (näkyy vain tunneissa tiedoksi).
 import React, { useEffect, useState } from 'react'
 import { sb } from './supabaseClient.js'
-import { num, fmtNum, fmtTime, fmtDuration, timeToMin, calcHours, suggestPerDiem, allocateDayKm, PER_DIEM_LABELS } from './worklog.js'
+import {
+  num, round2, fmtNum, fmtEur, fmtTime, fmtDuration, timeToMin, calcHours, suggestPerDiem, allocateDayKm, PER_DIEM_LABELS,
+  TES_NIMIKKEET, findNimike, unitPrice, UNITS, MATERIAL_UNITS,
+} from './worklog.js'
+
+const MATERIAL_SUGGESTIONS = ['Silikoni', 'Elastinen saumausmassa', 'Akryylimassa', 'Pohjanauha', 'Primer', 'Puhdistusaine', 'Maalarinteippi']
 
 const pad = n => String(n).padStart(2, '0')
 export const nowDate = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
@@ -203,7 +208,8 @@ function SwitchModal({ live, sites, clients, makeEntryRow, onClose, onDone, show
     setBusy(true)
     let error = null
     if (retarget) {
-      const { work_date, depart_time, start_time, ...fields } = r.row // eslint-disable-line no-unused-vars
+      // Kohteen vaihto ei saa nollata jo kirjattuja määriä tai materiaaleja
+      const { work_date, depart_time, start_time, lines, materials, ...fields } = r.row // eslint-disable-line no-unused-vars
       const res = await sb.from('work_entries').update({ ...fields, status: 'kaynnissa', hours: 0, km: 0, per_diem: 'ei' }).eq('id', cur.id).select()
       error = res.error
       if (!error && curTrip) {
@@ -367,9 +373,145 @@ function HomeModal({ live, sites, settings, onClose, onDone, showToast }) {
   )
 }
 
+// --- Päivän määrät työmaalla (urakkarivit, tunnit, materiaalit) ---------------
+// Määrät kirjataan käynnissä olevaan päivään heti työmaalla, ettei niitä tarvitse
+// muistella kotona. Tallennus ei päätä päivää; samat rivit näkyvät tarkistuksessa.
+const sstr = v => (v === null || v === undefined || v === '' ? '' : String(v).replace('.', ','))
+export function hasAmounts(e) { return (e?.lines || []).length > 0 || (e?.materials || []).length > 0 }
+export function amountsSummary(e) {
+  const parts = (e?.lines || []).map(l => `${fmtNum(num(l.maara))} ${l.yksikko} ${l.hourly ? (l.tyolaji || 'tunteja').toLowerCase() : shortName(l.tyolaji)}`)
+  return parts.join(', ')
+}
+const shortName = n => String(n || '').replace(/^Elementti- ja ikkunasauma/, 'elem.sauma').replace(/^Läpimeno, /, 'läpimeno ').toLowerCase()
+
+function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, showToast }) {
+  const site = entry.site_id && sites.find(x => x.id === entry.site_id)
+  const client = site && clients.find(c => c.id === site.client_id)
+  const hourRate = num(client?.hourly_rate) || num(entry.hourly_rate) || num(settings.hourlyRate)
+  const multiplier = num(entry.multiplier) || num(settings.multiplier) || 1.75
+  const emptyU = () => ({ tyolaji: '', maara: '', yksikko: 'jm', tes: '' })
+  const [lines, setLines] = useState(() => {
+    const ls = (entry.lines || []).map(l => ({ ...l, maara: sstr(l.maara), tes: sstr(l.tes) }))
+    return ls.some(l => !l.hourly) || ls.length ? ls : [emptyU()]
+  })
+  const [mats, setMats] = useState(() => (entry.materials || []).map(m => ({ ...m, maara: sstr(m.maara) })))
+  const [busy, setBusy] = useState(false)
+  const setL = (i, k, v) => setLines(ls => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)))
+  const setM = (i, k, v) => setMats(ms => ms.map((m, j) => (j === i ? { ...m, [k]: v } : m)))
+  function pick(i, v) {
+    setLines(ls => ls.map((l, j) => {
+      if (j !== i) return l
+      if (v === '__custom') return { ...l, _custom: true, tyolaji: findNimike(l.tyolaji) ? '' : l.tyolaji }
+      const n = findNimike(v)
+      return n ? { ...l, _custom: false, tyolaji: n.label, yksikko: n.unit, tes: sstr(n.tes) } : { ...l, _custom: false, tyolaji: '' }
+    }))
+  }
+  const clean = lines.filter(l => num(l.maara) && num(l.tes)).map(l => (l.hourly
+    ? { tyolaji: (l.tyolaji || '').trim() || 'Tuntityö', maara: num(l.maara), yksikko: 'h', tes: num(l.tes), hourly: true }
+    : { tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'jm', tes: num(l.tes) }))
+  const total = round2(clean.reduce((s, l) => s + num(l.maara) * unitPrice(l, multiplier), 0))
+  const missingPrice = lines.some(l => num(l.maara) && !num(l.tes))
+
+  async function save() {
+    if (missingPrice) { showToast('⚠ Rivillä on määrä mutta ei hintaa'); return }
+    const materials = mats.filter(m => (m.nimi || '').trim() && num(m.maara)).map(m => ({ nimi: m.nimi.trim(), maara: num(m.maara), yksikko: m.yksikko || 'kpl' }))
+    const upd = { lines: clean, materials }
+    // Urakkarivit → kirjaus urakaksi (tunnit lasketaan silti kellonajoista tiedoksi)
+    if (clean.some(l => !l.hourly) && entry.kind !== 'urakka') { upd.kind = 'urakka'; upd.hours = 0; upd.hourly_rate = 0; upd.multiplier = multiplier }
+    setBusy(true)
+    const { error } = await sb.from('work_entries').update(upd).eq('id', entry.id)
+    setBusy(false)
+    if (error) { dbError(error, showToast); return }
+    showToast('✓ Määrät tallennettu päivälle')
+    onSaved()
+  }
+
+  return (
+    <Modal title={`📏 Päivän määrät`} onClose={onClose} busy={busy} actions={<>
+      <button className="kx-btn-ghost" disabled={busy} onClick={onClose}>Peruuta</button>
+      <button className="kx-btn-primary" disabled={busy} onClick={save}>{busy ? 'Tallennetaan…' : '✓ Tallenna määrät'}</button>
+    </>}>
+      <div className="kx-wl-clientinfo"><b>{entry.client_name}{entry.site ? `, ${entry.site}` : ''}</b>
+        <div className="kx-wl-period">Tallentuu käynnissä olevaan päivään. Voit lisätä ja korjata määriä koko päivän ajan.</div>
+      </div>
+
+      <div className="kx-wl-section-title">Urakka</div>
+      <div className="kx-day-amounts">
+        {lines.map((l, i) => {
+          if (l.hourly) return null
+          const known = findNimike(l.tyolaji)
+          const custom = l._custom || (!known && !!l.tyolaji)
+          const p = unitPrice(l, multiplier)
+          return (
+            <div key={i} className="kx-day-amount">
+              <select className="kx-input" aria-label="Nimike" value={custom ? '__custom' : (known ? known.label : '')} onChange={e => pick(i, e.target.value)}>
+                <option value="">— Valitse nimike —</option>
+                {TES_NIMIKKEET.map(([g, items]) => (
+                  <optgroup key={g} label={g}>{items.map(([name, unit, tes]) => <option key={name} value={name}>{name} · {fmtEur(tes)}/{unit}</option>)}</optgroup>
+                ))}
+                <option value="__custom">✏️ Muu työlaji (kirjoita)</option>
+              </select>
+              {custom && <input className="kx-input" placeholder="Työlaji" value={l.tyolaji} onChange={e => setL(i, 'tyolaji', e.target.value)} />}
+              <div className="kx-day-amount-row">
+                <input className="kx-input kx-day-qty" inputMode="decimal" placeholder="Määrä" aria-label="Määrä" value={l.maara} onChange={e => setL(i, 'maara', e.target.value)} />
+                <select className="kx-input" aria-label="Yksikkö" value={l.yksikko} onChange={e => setL(i, 'yksikko', e.target.value)}>
+                  {(UNITS.includes(l.yksikko) ? UNITS : [l.yksikko, ...UNITS]).map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+                <input className="kx-input" inputMode="decimal" placeholder="TES €" aria-label="TES-hinta" value={l.tes} onChange={e => setL(i, 'tes', e.target.value)} />
+                <button className="kx-icon-btn" aria-label="Poista rivi" onClick={() => setLines(ls => ls.filter((_, j) => j !== i))}>✕</button>
+              </div>
+              {p > 0 && num(l.maara) > 0 && <div className="kx-wl-period">{fmtNum(num(l.maara))} {l.yksikko} × {fmtEur(p)} = <b>{fmtEur(round2(num(l.maara) * p))}</b></div>}
+            </div>
+          )
+        })}
+        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, emptyU()])}>＋ Urakkarivi</button>
+      </div>
+
+      {(entry.kind === 'urakka' || lines.some(l => !l.hourly && l.tyolaji)) && <>
+      <div className="kx-wl-section-title">Tunnit urakan lisäksi</div>
+      <div className="kx-day-amounts">
+        {lines.map((l, i) => {
+          if (!l.hourly) return null
+          return (
+            <div key={i} className="kx-day-amount">
+              <div className="kx-day-amount-row">
+                <input className="kx-input" style={{ flex: 2 }} placeholder="esim. Siivous" value={l.tyolaji} onChange={e => setL(i, 'tyolaji', e.target.value)} />
+                <input className="kx-input kx-day-qty" inputMode="decimal" placeholder="h" aria-label="Tunnit" value={l.maara} onChange={e => setL(i, 'maara', e.target.value)} />
+                <input className="kx-input" inputMode="decimal" placeholder="€/h" aria-label="Tuntihinta" value={l.tes} onChange={e => setL(i, 'tes', e.target.value)} />
+                <button className="kx-icon-btn" aria-label="Poista tuntirivi" onClick={() => setLines(ls => ls.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            </div>
+          )
+        })}
+        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, { tyolaji: '', maara: '', yksikko: 'h', tes: sstr(hourRate), hourly: true }])}>＋ Tunteja (esim. siivous)</button>
+      </div>
+      </>}
+
+      <div className="kx-wl-section-title">Materiaalit</div>
+      <div className="kx-day-amounts">
+        <datalist id="kx-day-mats">{MATERIAL_SUGGESTIONS.map(t => <option key={t} value={t} />)}</datalist>
+        {mats.map((m, i) => (
+          <div key={i} className="kx-day-amount-row">
+            <input className="kx-input" style={{ flex: 2 }} list="kx-day-mats" placeholder="Materiaali" value={m.nimi} onChange={e => setM(i, 'nimi', e.target.value)} />
+            <input className="kx-input kx-day-qty" inputMode="decimal" placeholder="Määrä" value={m.maara} onChange={e => setM(i, 'maara', e.target.value)} />
+            <select className="kx-input" value={m.yksikko} onChange={e => setM(i, 'yksikko', e.target.value)}>
+              {(MATERIAL_UNITS.includes(m.yksikko) ? MATERIAL_UNITS : [m.yksikko, ...MATERIAL_UNITS]).map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+            <button className="kx-icon-btn" aria-label="Poista materiaali" onClick={() => setMats(ms => ms.filter((_, j) => j !== i))}>✕</button>
+          </div>
+        ))}
+        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setMats(ms => [...ms, { nimi: '', maara: '', yksikko: 'kpl' }])}>＋ Materiaali</button>
+      </div>
+
+      {total > 0 && <div className="kx-wl-calc">Laskutettavaa tältä työmaalta <b>{fmtEur(total)}</b> <span>(urakka TES × {fmtNum(multiplier)})</span></div>}
+    </Modal>
+  )
+}
+
 // --- Päivä käynnissä -paneeli (näkyy kaikilla välilehdillä) -------------------
 export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChanged, onReview, onEdit, showToast }) {
   const [modal, setModal] = useState(null) // 'switch' | 'home'
+  const [amountsFor, setAmountsFor] = useState(null) // kirjauksen id, jonka määriä muokataan
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(nowTime)
   useEffect(() => { const t = setInterval(() => setNow(nowTime()), 30000); return () => clearInterval(t) }, [])
@@ -385,10 +527,12 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
     setBusy(true)
     const { error } = await sb.from('work_entries').update(fields).eq('id', cur.id)
     setBusy(false)
-    if (error) { dbError(error, showToast); return }
+    if (error) { dbError(error, showToast); return false }
     if (msg) showToast(msg)
     onChanged()
+    return true
   }
+  const amountsEntry = amountsFor && segs.find(e => e.id === amountsFor)
   const t = nowTime()
   const arrive = () => update({ start_time: t }, '🏗 Työt alkoivat ' + fmtTime(t))
   const breakStart = () => update({ live: { ...(cur.live || {}), break_start: t } }, '⏸ Tauko alkoi')
@@ -403,7 +547,10 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
       fields.break_minutes = (Number(cur.break_minutes) || 0) + minsBetween(cur.live.break_start, t)
       fields.live = { ...cur.live, break_start: null }
     }
-    update(fields, '🏁 Työt loppuivat ' + fmtTime(t))
+    // Urakkapäivä ilman kirjattuja määriä → avataan määrien kirjaus heti, kun ollaan vielä työmaalla
+    update(fields, '🏁 Työt loppuivat ' + fmtTime(t)).then(ok => {
+      if (ok && cur.kind === 'urakka' && !hasAmounts(cur)) setAmountsFor(cur.id)
+    })
   }
   const resume = () => update({ end_time: null }, '↩ Jatketaan töitä')
   async function cancelDay() {
@@ -438,6 +585,9 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
             {e.break_minutes ? ` · tauko ${e.break_minutes} min` : ''}
             {e.live?.break_start && !e.end_time ? ` · tauolla klo ${fmtTime(e.live.break_start)} alkaen` : ''}
             {phase === 'tarkistus' && num(e.km) > 0 ? ` · ${fmtNum(e.km)} km` : ''}
+            {hasAmounts(e)
+              ? <div className="kx-day-amountsum">📏 {amountsSummary(e) || 'materiaalit kirjattu'} <button className="kx-wl-linkbtn" onClick={() => setAmountsFor(e.id)}>muokkaa</button></div>
+              : e.start_time && e !== cur && <div className="kx-day-amountsum"><button className="kx-wl-linkbtn" onClick={() => setAmountsFor(e.id)}>📏 Kirjaa määrät tälle työmaalle</button></div>}
           </li>
         ))}
         {cur.return_time && <li>🏠 Kotona {fmtTime(cur.return_time)}{cur.per_diem !== 'ei' ? ` · ${PER_DIEM_LABELS[cur.per_diem].toLowerCase()}` : ''}</li>}
@@ -449,6 +599,7 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
         </>}
         {phase === 'tyo' && <>
           <button className="kx-btn-primary" disabled={busy} onClick={endWork}>🏁 Työt loppui</button>
+          <button className="kx-btn-ghost" disabled={busy} onClick={() => setAmountsFor(cur.id)}>📏 Kirjaa määrät</button>
           <button className="kx-btn-ghost" disabled={busy} onClick={breakStart}>⏸ Tauko alkaa</button>
           <button className="kx-btn-ghost" disabled={busy} onClick={quickBreak}>＋ Ruokatauko 30 min</button>
           <button className="kx-btn-ghost" disabled={busy} onClick={() => setModal('switch')}>🔁 Vaihdan työmaata</button>
@@ -459,6 +610,7 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
         </>}
         {phase === 'paluu' && <>
           <button className="kx-btn-primary" disabled={busy} onClick={() => setModal('home')}>🏠 Olen kotona</button>
+          <button className="kx-btn-ghost" disabled={busy} onClick={() => setAmountsFor(cur.id)}>📏 {hasAmounts(cur) ? 'Muokkaa määriä' : 'Kirjaa määrät'}</button>
           <button className="kx-btn-ghost" disabled={busy} onClick={() => setModal('switch')}>🔁 Lähden toiselle työmaalle</button>
           <button className="kx-btn-ghost" disabled={busy} onClick={resume}>↩ Jatkan töitä</button>
         </>}
@@ -473,6 +625,10 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
       {modal === 'switch' && (
         <SwitchModal live={live} sites={sites} clients={clients} makeEntryRow={makeEntryRow} showToast={showToast}
           onClose={() => setModal(null)} onDone={() => { setModal(null); onChanged() }} />
+      )}
+      {amountsEntry && (
+        <DayAmountsModal entry={amountsEntry} sites={sites} clients={clients} settings={settings} showToast={showToast}
+          onClose={() => setAmountsFor(null)} onSaved={() => { setAmountsFor(null); onChanged() }} />
       )}
       {modal === 'home' && (
         <HomeModal live={live} sites={sites} settings={settings} showToast={showToast}
@@ -499,6 +655,16 @@ export const DAYFLOW_CSS = `
 .kx-day-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .kx-day-actions .kx-btn-primary { font-size: 15px; padding: 12px 18px; }
 .kx-day-links { display: flex; gap: 16px; flex-wrap: wrap; }
+.kx-day-amountsum { font-size: 12.5px; color: #475569; margin-top: 2px; }
+.kx-day-amountsum .kx-wl-linkbtn { color: #0878E8; margin: 0 0 0 4px; font-size: 12.5px; }
+.kx-day-amounts { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.kx-day-amounts > * { width: 100%; }
+.kx-day-amounts > .kx-btn-sm { width: auto; }
+.kx-day-amount { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed #e3e8ef; }
+.kx-day-amount-row { display: flex; gap: 6px; align-items: center; }
+.kx-day-amount-row > .kx-input { flex: 1; min-width: 0; }
+.kx-day-amount-row > .kx-day-qty { flex: 1.3; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kx-wl-modal .kx-day-amounts .kx-input { font-size: 16px; }
 .kx-day-links .kx-wl-linkbtn { color: #475569; margin-top: 0; }
 @media (max-width: 640px) {
   .kx-day-actions > button { flex: 1 1 100%; }
