@@ -33,15 +33,51 @@ export const DEFAULT_SETTINGS = {
 
 const SETTINGS_KEY = 'korpnex_tt_worklog_settings_v1'
 
+// --- Verovapaat korvaukset vuosittain ----------------------------------------
+// Jokainen päivä ja ajo lasketaan OMAN vuotensa määrillä, joten vanhat
+// matkalaskut ja laskutetut päivärahat eivät muutu, kun uuden vuoden määrät
+// lisätään. Verohallinnon päätös julkaistaan joulukuussa; lisää uusi vuosi
+// Asetuksiin. Puuttuva vuosi käyttää edellisen tunnetun vuoden määriä.
+export const OFFICIAL_RATES = {
+  2026: { ownKmRate: 0.55, pdPart: 25, pdFull: 54 },
+}
+export const RATE_KEYS = ['ownKmRate', 'pdPart', 'pdFull']
+export function rateTable(settings) {
+  return { ...OFFICIAL_RATES, ...(settings?.yearRates || {}) }
+}
+export function yearRates(settings, date) {
+  const y = String(date || '').slice(0, 4) || String(new Date().getFullYear())
+  const table = rateTable(settings)
+  if (table[y]) return { year: y, from: y, fallback: false, ...table[y] }
+  const years = Object.keys(table).sort()
+  const from = years.filter(k => k <= y).pop() || years[0]
+  return { year: y, from, fallback: true, ...table[from] }
+}
+// Asetukset, joissa korvaukset ovat päivän vuoden mukaiset
+export function ratesFor(settings, date) {
+  const r = yearRates(settings, date)
+  return { ...settings, ownKmRate: num(r.ownKmRate), pdPart: num(r.pdPart), pdFull: num(r.pdFull) }
+}
+
+function normalizeSettings(raw) {
+  const s = { ...DEFAULT_SETTINGS, ...(raw || {}) }
+  // Vanhat asetukset (yksi määrä kaikille vuosille) → vuoden 2026 määriksi
+  if (!s.yearRates) {
+    s.yearRates = { 2026: Object.fromEntries(RATE_KEYS.map(k => [k, num(raw?.[k] ?? OFFICIAL_RATES[2026][k])])) }
+  }
+  return s
+}
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS }
-  } catch { return { ...DEFAULT_SETTINGS } }
+    return normalizeSettings(raw ? JSON.parse(raw) : null)
+  } catch { return normalizeSettings(null) }
 }
 export function saveSettings(s) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)) } catch { /* ei väliä */ }
 }
+// Tietokannasta (wl_settings) tulleet asetukset; puhelin ja kone käyttävät samoja
+export function mergeDbSettings(data) { return normalizeSettings(data) }
 
 export const KIND_LABELS = { tunti: 'Tuntityö', urakka: 'Urakka', konsultointi: 'Konsultointi' }
 export const PER_DIEM_LABELS = { ei: 'Ei päivärahaa', osa: 'Osapäiväraha', koko: 'Kokopäiväraha' }
@@ -156,8 +192,9 @@ export function entryTotals(e, settings = DEFAULT_SETTINGS) {
   }
   const kmBill = e.km_billable ? round2(num(e.km) * num(e.km_rate)) : 0
   const travelTime = round2(num(e.travel_hours) * num(e.travel_rate))
-  const perDiem = e.per_diem === 'koko' ? num(settings.pdFull) : e.per_diem === 'osa' ? num(settings.pdPart) : 0
-  const ownKm = round2(num(e.km) * num(settings.ownKmRate))
+  const r = yearRates(settings, e.work_date)
+  const perDiem = e.per_diem === 'koko' ? num(r.pdFull) : e.per_diem === 'osa' ? num(r.pdPart) : 0
+  const ownKm = round2(num(e.km) * num(r.ownKmRate))
   const perDiemBill = e.per_diem_billable ? perDiem : 0
   return {
     work: round2(work),
@@ -380,7 +417,8 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
       add(cls, `km|${num(e.km_rate)}`, { desc: 'Matkakulut', unit: 'km', price: num(e.km_rate), addQty: num(e.km) }).entries.push(e)
     }
     if (e.per_diem_billable && e.per_diem !== 'ei') {
-      const amount = e.per_diem === 'koko' ? num(settings.pdFull) : num(settings.pdPart)
+      const r = yearRates(settings, e.work_date)
+      const amount = e.per_diem === 'koko' ? num(r.pdFull) : num(r.pdPart)
       if (amount) add(cls, `pd|${e.per_diem}|${amount}`, { desc: PER_DIEM_LABELS[e.per_diem], unit: 'pv', price: amount, addQty: 1, pd: true }).entries.push(e)
     }
     if (num(e.travel_hours) && num(e.travel_rate)) {
@@ -460,45 +498,81 @@ function mergeNames(names) {
   return keep.join(' & ')
 }
 // UKKO-laskun rivit: nimikkeet yhdistetään työmaista ja päivistä riippumatta,
-// ei asiakastietoja, ALV-tekstejä eikä materiaaleja (ne ovat UKKO:n laskupohjassa).
+// ei asiakastietoja eikä materiaaleja (ne ovat UKKO:n laskupohjassa).
+// Rivit erotellaan verokäsittelyn mukaan: rakentamispalvelu (käännetty ALV, alv 0)
+// ja muut palvelut (esim. konsultointi, ALV 25,5 %). Rivillä vat = 'kaannetty' | 'alv'.
 export function buildUkkoRows(entries, settings = DEFAULT_SETTINGS) {
   const rows = new Map()
-  const add = (key, base, qty) => {
-    const r = rows.get(key) || { ...base, qty: 0, names: [] }
+  const add = (vat, key, base, qty) => {
+    const k = `${vat}|${key}`
+    const r = rows.get(k) || { ...base, vat, qty: 0, names: [] }
     r.qty = round2(r.qty + qty)
     if (base.name) r.names.push(base.name)
-    rows.set(key, r)
+    rows.set(k, r)
   }
   for (const e of entries) {
+    const vat = vatClass(e)
     if (e.kind === 'urakka') {
       for (const l of e.lines || []) {
         const q = num(l.maara), price = unitPrice(l, e.multiplier)
         if (!q || !price) continue
-        if (l.hourly) add(`h|${price}`, { order: 1, unit: 'h', price, name: l.tyolaji || 'Tuntityö' }, q)
-        else { const n = invoiceName(l.tyolaji) || 'Urakkatyö'; add(`u|${n}|${unitOut(l.yksikko)}|${price}`, { order: 0, desc: n, unit: unitOut(l.yksikko), price }, q) }
+        if (l.hourly) add(vat, `h|${price}`, { order: 1, unit: 'h', price, name: l.tyolaji || 'Tuntityö' }, q)
+        else { const n = invoiceName(l.tyolaji) || 'Urakkatyö'; add(vat, `u|${n}|${unitOut(l.yksikko)}|${price}`, { order: 0, desc: n, unit: unitOut(l.yksikko), price }, q) }
       }
     } else if (num(e.hours) && num(e.hourly_rate)) {
       const n = e.kind === 'konsultointi' ? 'Työturvallisuuskonsultointi' : (settings.invoiceTitle || 'Tuntityö')
-      add(`t|${e.kind}|${num(e.hourly_rate)}`, { order: 1, desc: n, unit: 'h', price: num(e.hourly_rate) }, num(e.hours))
+      add(vat, `t|${e.kind}|${num(e.hourly_rate)}`, { order: 1, desc: n, unit: 'h', price: num(e.hourly_rate) }, num(e.hours))
     }
-    if (e.km_billable && num(e.km) && num(e.km_rate)) add(`km|${num(e.km_rate)}`, { order: 2, desc: 'Kilometrikorvaus', unit: 'km', price: num(e.km_rate) }, num(e.km))
+    if (e.km_billable && num(e.km) && num(e.km_rate)) add(vat, `km|${num(e.km_rate)}`, { order: 2, desc: 'Kilometrikorvaus', unit: 'km', price: num(e.km_rate) }, num(e.km))
     if (e.per_diem_billable && e.per_diem !== 'ei') {
-      const amount = e.per_diem === 'koko' ? num(settings.pdFull) : num(settings.pdPart)
-      if (amount) add(`pd|${e.per_diem}`, { order: 3, desc: PER_DIEM_LABELS[e.per_diem], unit: 'pv', price: amount }, 1)
+      const r = yearRates(settings, e.work_date)
+      const amount = e.per_diem === 'koko' ? num(r.pdFull) : num(r.pdPart)
+      if (amount) add(vat, `pd|${e.per_diem}|${amount}`, { order: 3, desc: PER_DIEM_LABELS[e.per_diem], unit: 'pv', price: amount }, 1)
     }
-    if (num(e.travel_hours) && num(e.travel_rate)) add(`tt|${num(e.travel_rate)}`, { order: 3, desc: 'Matka-aika', unit: 'h', price: num(e.travel_rate) }, num(e.travel_hours))
+    if (num(e.travel_hours) && num(e.travel_rate)) add(vat, `tt|${num(e.travel_rate)}`, { order: 3, desc: 'Matka-aika', unit: 'h', price: num(e.travel_rate) }, num(e.travel_hours))
   }
+  const vatOrder = v => (v === 'kaannetty' ? 0 : 1)
   return [...rows.values()]
-    .map(r => ({ desc: r.desc || mergeNames(r.names), unit: r.unit, price: r.price, qty: r.qty, total: round2(r.qty * r.price), order: r.order }))
-    .sort((a, b) => a.order - b.order)
+    .map(r => ({ desc: r.desc || mergeNames(r.names), unit: r.unit, price: r.price, qty: r.qty, total: round2(r.qty * r.price), order: r.order, vat: r.vat }))
+    .sort((a, b) => vatOrder(a.vat) - vatOrder(b.vat) || a.order - b.order)
+}
+// Rivit verokäsittelyittäin: [{ vat, title, rows, net, vatEur, gross }]
+export function ukkoGroups(rows, settings = DEFAULT_SETTINGS) {
+  const out = []
+  for (const vat of ['kaannetty', 'alv']) {
+    const rs = rows.filter(r => r.vat === vat)
+    if (!rs.length) continue
+    const net = round2(rs.reduce((s, r) => s + r.total, 0))
+    const vatEur = vat === 'alv' ? round2(net * num(settings.vatPct) / 100) : 0
+    out.push({
+      vat, rows: rs, net, vatEur, gross: round2(net + vatEur),
+      title: vat === 'kaannetty' ? 'Rakentamispalvelu, käännetty verovelvollisuus (alv 0 %)' : `Palvelut, alv ${fmtNum(settings.vatPct, 1)} %`,
+    })
+  }
+  return out
 }
 export function ukkoText(entries, settings = DEFAULT_SETTINGS) {
   const rows = buildUkkoRows(entries, settings)
+  const groups = ukkoGroups(rows, settings)
   const sites = [...new Set(entries.map(e => (e.site || '').trim()).filter(Boolean))]
   const title = [settings.invoiceTitle || '', sites.join(', '), datesText(entries.map(e => e.work_date))].filter(Boolean).join(' ')
   const out = [title, '']
-  for (const r of rows) out.push(`${r.desc}: ${fmtNum(r.qty)} ${r.unit} × ${fmtEur(r.price)} = ${fmtEur(r.total)}`)
-  out.push('', `Yhteensä alv 0: ${fmtEur(round2(rows.reduce((s, r) => s + r.total, 0)))}`)
+  const line = r => `${r.desc}: ${fmtNum(r.qty)} ${r.unit} × ${fmtEur(r.price)} = ${fmtEur(r.total)}`
+  if (!groups.length || (groups.length === 1 && groups[0].vat === 'kaannetty')) {
+    // Tavallinen tapaus: pelkkä rakentamispalvelu (käännetty ALV)
+    for (const r of rows) out.push(line(r))
+    out.push('', `Yhteensä alv 0: ${fmtEur(groups[0]?.net || 0)}`)
+  } else {
+    // Eri verokäsittelyt omina ryhminään (UKKO:ssa omat rivinsä oikealla ALV:lla)
+    groups.forEach((g, i) => {
+      if (i) out.push('')
+      out.push(`${g.title}:`)
+      for (const r of g.rows) out.push(line(r))
+      out.push(g.vat === 'kaannetty'
+        ? `Yhteensä alv 0: ${fmtEur(g.net)}`
+        : `Yhteensä veroton ${fmtEur(g.net)} + ALV ${fmtNum(settings.vatPct, 1)} % ${fmtEur(g.vatEur)} = ${fmtEur(g.gross)}`)
+    })
+  }
   return out.join('\n')
 }
 // Viesti tilaajan ryhmään: työmaittain, kohdittain, määrät ilman hintoja
@@ -644,10 +718,11 @@ export function buildTravelClaim(entries, settings = DEFAULT_SETTINGS, trips = [
     .filter(e => num(e.km) > 0 || e.per_diem !== 'ei')
     .map(e => {
       const t = entryTotals(e, settings)
-      return { date: e.work_date, client: e.client_name, site: e.site || '', km: num(e.km), kmEur: t.ownKm, perDiem: e.per_diem, pdEur: t.perDiem }
+      return { date: e.work_date, client: e.client_name, site: e.site || '', km: num(e.km), kmEur: t.ownKm, kmRate: num(yearRates(settings, e.work_date).ownKmRate), perDiem: e.per_diem, pdEur: t.perDiem }
     })
   for (const t of standaloneTrips(trips)) {
-    rows.push({ date: t.trip_date, client: t.client_name || '', site: t.purpose || t.route || 'Työajo', km: num(t.km), kmEur: round2(num(t.km) * num(settings.ownKmRate)), perDiem: 'ei', pdEur: 0 })
+    const rate = num(yearRates(settings, t.trip_date).ownKmRate)
+    rows.push({ date: t.trip_date, client: t.client_name || '', site: t.purpose || t.route || 'Työajo', km: num(t.km), kmEur: round2(num(t.km) * rate), kmRate: rate, perDiem: 'ei', pdEur: 0 })
   }
   rows.sort((a, b) => a.date.localeCompare(b.date))
   const km = round2(rows.reduce((s, r) => s + r.km, 0))
@@ -660,7 +735,7 @@ export function travelClaimText(claim, settings = DEFAULT_SETTINGS) {
   const rows = ['Matkalasku']
   for (const r of claim.rows) {
     const parts = [fmtDate(r.date), [r.site, r.client].filter(Boolean).join(' / ')]
-    if (r.km) parts.push(`${fmtNum(r.km)} km × ${fmtEur(settings.ownKmRate)} = ${fmtEur(r.kmEur)}`)
+    if (r.km) parts.push(`${fmtNum(r.km)} km × ${fmtEur(r.kmRate ?? settings.ownKmRate)} = ${fmtEur(r.kmEur)}`)
     if (r.pdEur) parts.push(`${PER_DIEM_LABELS[r.perDiem]} ${fmtEur(r.pdEur)}`)
     rows.push(parts.join(' · '))
   }

@@ -5,7 +5,7 @@
 // Jos rivejä on enemmän kuin pohjassa, lisätään rivejä ja kirjoitetaan
 // kaikki pohjan kaavat ja yhdistetyt solut uudelleen oikeille riveille,
 // koska ExcelJS ei siirrä niitä itse.
-import { num, round2, DEFAULT_SETTINGS, standaloneTrips } from './worklog.js'
+import { num, round2, DEFAULT_SETTINGS, standaloneTrips, ratesFor } from './worklog.js'
 
 const TEMPLATE_URL = '/ukko-matkalasku-2026.xlsx'
 // Pohjan rakenne (rivinumerot alkuperäisessä tiedostossa)
@@ -59,9 +59,11 @@ export async function fillUkkoTravelClaim(ExcelJS, templateBuf, entries, sites, 
   await wb.xlsx.load(templateBuf)
   const ws = wb.worksheets[0]
   const { km, pd } = travelRows(entries, sites, profile, trips)
-  const kmRate = num(settings.ownKmRate) || 0.55
-  const pdFull = num(settings.pdFull) || 54
-  const pdPart = num(settings.pdPart) || 25
+  // Korvaukset matkalaskun vuoden mukaan (vanhat matkalaskut eivät muutu uusista määristä)
+  const rates = ratesFor(settings, entries[0]?.work_date || trips[0]?.trip_date)
+  const kmRate = num(rates.ownKmRate) || 0.55
+  const pdFull = num(rates.pdFull) || 54
+  const pdPart = num(rates.pdPart) || 25
 
   const kmExtra = Math.max(0, km.length - (KM_LAST - KM_FIRST + 1))
   const pdExtra = Math.max(0, pd.length - (PD_LAST - PD_FIRST + 1))
@@ -134,7 +136,7 @@ export async function fillUkkoTravelClaim(ExcelJS, templateBuf, entries, sites, 
     row.getCell('H').value = x ? x.part : null
     row.getCell('I').value = x ? 0 : null
     const eur = x ? x.full * pdFull + x.part * pdPart : 0
-    row.getCell('J').value = { formula: `(G${r}*54)+(H${r}*25)`, result: eur }
+    row.getCell('J').value = { formula: `(G${r}*${pdFull})+(H${r}*${pdPart})`, result: eur }
     if (x) { nFull += x.full; nPart += x.part; pdEur += eur }
   }
   ws.getCell(`G${pdTotal}`).value = { formula: `SUM(G${pdFirst}:G${pdLast})`, result: nFull }
