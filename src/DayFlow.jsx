@@ -10,9 +10,11 @@
 //   🏠 Kotona         → loppulukema, km:t jaetaan työmaille, päivärahaehdotus
 //   📝 Tarkista       → tavallinen lomake (urakkarivit, materiaalit) → status 'valmis'
 // Keskeneräinen päivä ei näy laskuilla, matkalaskulla eikä summissa ennen tarkistusta.
+// Napit toimivat myös ilman verkkoa: muutokset jonoon puhelimeen (dayOutbox.js),
+// ja ne lähtevät automaattisesti, kun yhteys palaa.
 // Matka-aikaa ei laskuteta (näkyy vain tunneissa tiedoksi).
 import React, { useEffect, useState } from 'react'
-import { sb } from './supabaseClient.js'
+import { exec, tmpId } from './dayOutbox.js'
 import {
   num, round2, fmtNum, fmtEur, fmtTime, fmtDuration, timeToMin, calcHours, suggestPerDiem, allocateDayKm, PER_DIEM_LABELS,
   TES_NIMIKKEET, findNimike, unitPrice, UNITS, MATERIAL_UNITS,
@@ -102,6 +104,7 @@ const dbError = (error, showToast) => {
     ? '⚠ Tietokanta pitää päivittää: aja supabase/tyoajat.sql uudelleen'
     : '⚠ Tallennus epäonnistui')
 }
+const OFFLINE = ' 📶 Ei yhteyttä, tallentuu kun verkko palaa.'
 
 function Modal({ title, children, actions, onClose, busy }) {
   return (
@@ -140,20 +143,20 @@ export function DayStartModal({ sites, clients, settings, lastOdo, lastSiteId, m
       depart_time: d.time, start_time: d.atSite ? d.time : null, end_time: null, return_time: null,
       break_minutes: 0, hours: 0, km: 0, per_diem: 'ei', invoiced_at: null,
     }
-    const res = await sb.from('work_entries').insert([entry]).select()
-    if (res.error) { setBusy(false); dbError(res.error, showToast); return }
-    const saved = res.data[0]
+    const eid = tmpId()
+    const ops = [{ table: 'work_entries', action: 'insert', tmp: eid, row: entry }]
     if (d.car) {
       const home = (settings.homeAddress || '').trim() || 'Koti'
-      const dest = siteAddr(sites, saved)
-      const tr = await sb.from('wl_trips').insert([{
-        trip_date: date, start_time: d.time, odo_start: odo, site_id: saved.site_id || null,
-        client_name: saved.client_name, purpose: purposeOf(saved), route: dest ? [home, dest].join(SEP) : null, entry_id: saved.id,
-      }]).select()
-      if (tr.error) console.error('day trip insert failed:', tr.error)
+      const dest = siteAddr(sites, entry)
+      ops.push({ table: 'wl_trips', action: 'insert', tmp: tmpId(), row: {
+        trip_date: date, start_time: d.time, odo_start: odo, site_id: entry.site_id || null,
+        client_name: entry.client_name, purpose: purposeOf(entry), route: dest ? [home, dest].join(SEP) : null, entry_id: eid,
+      } })
     }
+    const r2 = await exec(ops)
     setBusy(false)
-    showToast(d.atSite ? '🏗 Työpäivä aloitettu' : '🚗 Työpäivä aloitettu, hyvää matkaa!')
+    if (r2.error) { dbError(r2.error, showToast); return }
+    showToast((d.atSite ? '🏗 Työpäivä aloitettu' : '🚗 Työpäivä aloitettu, hyvää matkaa!') + (r2.queued ? OFFLINE : ''))
     onStarted()
   }
 
@@ -206,51 +209,44 @@ function SwitchModal({ live, sites, clients, makeEntryRow, onClose, onDone, show
     if (r.error) { showToast(r.error); return }
     if (odo != null && curTrip?.odo_start != null && odo < curTrip.odo_start) { showToast('⚠ Lukema on pienempi kuin lähtölukema'); return }
     setBusy(true)
-    let error = null
+    const ops = []
     if (retarget) {
       // Kohteen vaihto ei saa nollata jo kirjattuja määriä tai materiaaleja
       const { work_date, depart_time, start_time, lines, materials, ...fields } = r.row // eslint-disable-line no-unused-vars
-      const res = await sb.from('work_entries').update({ ...fields, status: 'kaynnissa', hours: 0, km: 0, per_diem: 'ei' }).eq('id', cur.id).select()
-      error = res.error
-      if (!error && curTrip) {
-        const e2 = res.data[0]
-        await sb.from('wl_trips').update({ site_id: e2.site_id || null, client_name: e2.client_name, purpose: purposeOf(e2) }).eq('id', curTrip.id)
-      }
+      ops.push({ table: 'work_entries', action: 'update', match: { id: cur.id }, fields: { ...fields, status: 'kaynnissa', hours: 0, km: 0, per_diem: 'ei' } })
+      if (curTrip) ops.push({ table: 'wl_trips', action: 'update', match: { id: curTrip.id }, fields: { site_id: fields.site_id || null, client_name: fields.client_name, purpose: purposeOf(fields) } })
     } else {
       const upd = { end_time: hhmm(cur.end_time) || d.time }
       if (cur.live?.break_start) {
         upd.break_minutes = (Number(cur.break_minutes) || 0) + minsBetween(cur.live.break_start, d.time)
         upd.live = { ...cur.live, break_start: null }
       }
-      const a = await sb.from('work_entries').update(upd).eq('id', cur.id)
-      error = a.error
-      if (!error && curTrip && curTrip.odo_end == null) {
-        await sb.from('wl_trips').update({
+      ops.push({ table: 'work_entries', action: 'update', match: { id: cur.id }, fields: upd })
+      if (curTrip && curTrip.odo_end == null) {
+        ops.push({ table: 'wl_trips', action: 'update', match: { id: curTrip.id }, fields: {
           end_time: d.time, odo_end: odo,
           km: odo != null && curTrip.odo_start != null ? odo - curTrip.odo_start : null,
-        }).eq('id', curTrip.id)
+        } })
       }
-      if (!error) {
-        const first = live.entries[0]
-        const res = await sb.from('work_entries').insert([{
-          ...r.row, work_date: cur.work_date, status: 'kaynnissa', live: { car },
-          depart_time: hhmm(first.depart_time) || null, start_time: null, end_time: null, return_time: null,
-          break_minutes: 0, hours: 0, km: 0, per_diem: 'ei', invoiced_at: null,
-        }]).select()
-        error = res.error
-        if (!error && car) {
-          const e2 = res.data[0]
-          const tr = await sb.from('wl_trips').insert([{
-            trip_date: cur.work_date, start_time: d.time, odo_start: odo, site_id: e2.site_id || null,
-            client_name: e2.client_name, purpose: purposeOf(e2), entry_id: e2.id,
-          }])
-          if (tr.error) console.error('switch trip insert failed:', tr.error)
-        }
+      const first = live.entries[0]
+      const eid = tmpId()
+      const row = {
+        ...r.row, work_date: cur.work_date, status: 'kaynnissa', live: { car },
+        depart_time: hhmm(first.depart_time) || null, start_time: null, end_time: null, return_time: null,
+        break_minutes: 0, hours: 0, km: 0, per_diem: 'ei', invoiced_at: null,
+      }
+      ops.push({ table: 'work_entries', action: 'insert', tmp: eid, row })
+      if (car) {
+        ops.push({ table: 'wl_trips', action: 'insert', tmp: tmpId(), row: {
+          trip_date: cur.work_date, start_time: d.time, odo_start: odo, site_id: row.site_id || null,
+          client_name: row.client_name, purpose: purposeOf(row), entry_id: eid,
+        } })
       }
     }
+    const res = await exec(ops)
     setBusy(false)
-    if (error) { dbError(error, showToast); return }
-    showToast(retarget ? '✓ Kohde vaihdettu' : '🔁 Työmaa vaihdettu, matkalla seuraavalle')
+    if (res.error) { dbError(res.error, showToast); return }
+    showToast((retarget ? '✓ Kohde vaihdettu' : '🔁 Työmaa vaihdettu, matkalla seuraavalle') + (res.queued ? OFFLINE : ''))
     onDone()
   }
 
@@ -309,8 +305,8 @@ function HomeModal({ live, sites, settings, onClose, onDone, showToast }) {
     const kms = car ? allocateDayKm(legs, total) : segs.map(() => 0)
     const home = (settings.homeAddress || '').trim() || 'Koti'
     setBusy(true)
-    let error = null
-    for (let i = 0; i < segs.length && !error; i++) {
+    const ops = []
+    for (let i = 0; i < segs.length; i++) {
       const e = segs[i], isLast = i === segs.length - 1
       const end = hhmm(e.end_time) || (isLast ? d.time : null)
       const c = calcHours(e.start_time, end, e.break_minutes)
@@ -319,24 +315,24 @@ function HomeModal({ live, sites, settings, onClose, onDone, showToast }) {
         per_diem: isLast && pd ? pd.value : 'ei', live: { ...(e.live || {}), break_start: null },
       }
       if (isLast) { upd.return_time = d.time; upd.depart_time = hhmm(first.depart_time) || null }
-      const res = await sb.from('work_entries').update(upd).eq('id', e.id)
-      error = res.error
+      ops.push({ table: 'work_entries', action: 'update', match: { id: e.id }, fields: upd })
       const t = trips[i]
-      if (!error && t) {
+      if (t) {
         const parts = [i === 0 ? home : siteAddr(sites, segs[i - 1]), siteAddr(sites, e)]
         if (isLast) parts.push(home)
-        await sb.from('wl_trips').update({
+        ops.push({ table: 'wl_trips', action: 'update', match: { id: t.id }, fields: {
           km: kms[i], route: parts.filter(Boolean).join(SEP),
           end_time: isLast ? d.time : (t.end_time || end),
           // Jos loppulukemaa ei kirjoitettu (vain km), lasketaan se: alkulukema + km.
           // Muuten seuraavan päivän lähtölukema näyttäisi työajot yksityisajona.
           odo_end: (isLast ? odo : t.odo_end) ?? (t.odo_start != null && kms[i] > 0 ? t.odo_start + kms[i] : null),
-        }).eq('id', t.id)
+        } })
       }
     }
+    const res = await exec(ops)
     setBusy(false)
-    if (error) { dbError(error, showToast); return }
-    showToast('🏠 Tervetuloa kotiin! Tarkista vielä päivän tiedot.')
+    if (res.error) { dbError(res.error, showToast); return }
+    showToast(res.queued ? '🏠 Tervetuloa kotiin!' + OFFLINE + ' Tarkista päivä sen jälkeen.' : '🏠 Tervetuloa kotiin! Tarkista vielä päivän tiedot.')
     onDone()
   }
 
@@ -443,18 +439,19 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
     if (clean.some(l => !l.hourly) && entry.kind !== 'urakka') { upd.kind = 'urakka'; upd.hours = 0; upd.hourly_rate = 0; upd.multiplier = multiplier }
     writeAmountsDraft(entry.id, { lines, mats, at: Date.now() })
     setBusy(true)
-    let error = null
-    try { ({ error } = await sb.from('work_entries').update(upd).eq('id', entry.id)) } catch (e) { error = e }
+    let res
+    try { res = await exec([{ table: 'work_entries', action: 'update', match: { id: entry.id }, fields: upd }]) } catch (e) { res = { error: e } }
     setBusy(false)
-    if (error) {
-      console.error('amounts save failed:', error)
-      showToast(/column|schema cache/i.test(error?.message || '')
+    if (res.error) {
+      console.error('amounts save failed:', res.error)
+      showToast(/column|schema cache/i.test(res.error?.message || '')
         ? '⚠ Tietokanta pitää päivittää: aja supabase/tyoajat.sql uudelleen'
-        : '⚠ Ei yhteyttä? Määrät ovat tallessa puhelimessa, yritä hetken päästä uudelleen')
+        : '⚠ Tallennus epäonnistui. Määrät ovat tallessa puhelimessa, yritä hetken päästä uudelleen')
       return
     }
+    // Jonossa olevat määrät ovat tallessa puhelimessa ja lähtevät itsestään
     clearAmountsDraft(entry.id)
-    showToast('✓ Määrät tallennettu päivälle')
+    showToast(res.queued ? '📏 Määrät tallessa puhelimessa.' + OFFLINE : '✓ Määrät tallennettu päivälle')
     onSaved()
   }
 
@@ -565,10 +562,10 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
 
   async function update(fields, msg) {
     setBusy(true)
-    const { error } = await sb.from('work_entries').update(fields).eq('id', cur.id)
+    const res = await exec([{ table: 'work_entries', action: 'update', match: { id: cur.id }, fields }])
     setBusy(false)
-    if (error) { dbError(error, showToast); return false }
-    if (msg) showToast(msg)
+    if (res.error) { dbError(res.error, showToast); return false }
+    if (msg) showToast(msg + (res.queued ? OFFLINE : ''))
     onChanged()
     return true
   }
@@ -597,11 +594,13 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
     if (!window.confirm('Perutaanko koko käynnissä oleva työpäivä? Kirjaukset ja ajot poistetaan.')) return
     setBusy(true)
     const ids = segs.map(e => e.id)
-    await sb.from('wl_trips').update({ archived: true }).in('entry_id', ids)
-    const { error } = await sb.from('work_entries').update({ archived: true }).in('id', ids)
+    const res = await exec([
+      { table: 'wl_trips', action: 'update', match: { entry_id: ids }, fields: { archived: true } },
+      { table: 'work_entries', action: 'update', match: { id: ids }, fields: { archived: true } },
+    ])
     setBusy(false)
-    if (error) { dbError(error, showToast); return }
-    showToast('🗑 Työpäivä peruttu'); onChanged()
+    if (res.error) { dbError(res.error, showToast); return }
+    showToast('🗑 Työpäivä peruttu' + (res.queued ? OFFLINE : '')); onChanged()
   }
 
   return (
