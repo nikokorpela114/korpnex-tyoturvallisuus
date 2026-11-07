@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = {
   pdFull: 54,          // kokopäiväraha 2026 (yli 10 h)
   vatPct: 25.5,
   // UKKO-matkalaskupohjaa varten (tekstiä)
+  invoiceTitle: 'Kiireapu', // UKKO-laskun otsikon alku: "Kiireapu Kauhajoki 3.11 & 6.11.2026"
   travelName: '',
   homeAddress: '',
   vehicle: '',
@@ -56,7 +57,11 @@ export const TES_NIMIKKEET = [
   ]],
   ['Ikkunasauma', [['Ikkunasauma 0…15 mm', 'jm', 1.67], ['Ikkunasauma 16…25 mm', 'jm', 1.80], ['Ikkunasauma 26…35 mm', 'jm', 3.01]]],
   ['Graniitin saumaus', [['Graniitin saumaus 0…15 mm', 'jm', 1.88]]],
-  ['Silikonisaumaus', [['Silikonisaumaus 0…10 mm', 'jm', 1.07], ['Silikonisaumaus 11…15 mm', 'jm', 1.21]]],
+  // 0…5 ja 6…10 mm kirjataan erikseen (viestiin), laskulle ne yhdistyvät TES-nimikkeeksi 0…10 mm
+  ['Silikonisaumaus', [
+    ['Silikonisaumaus 0…5 mm', 'jm', 1.07, 'Silikonisaumaus 0…10 mm'], ['Silikonisaumaus 6…10 mm', 'jm', 1.07, 'Silikonisaumaus 0…10 mm'],
+    ['Silikonisaumaus 0…10 mm', 'jm', 1.07], ['Silikonisaumaus 11…15 mm', 'jm', 1.21],
+  ]],
   ['Akryylisaumaus', [['Akryylisaumaus 0…10 mm', 'jm', 1.00], ['Akryylisaumaus 11…15 mm', 'jm', 1.13]]],
   ['Vaahdotus', [['Vaahdotus 0…20 mm', 'jm', 0.94], ['Vaahdotus, leikattuna yli 20 mm', 'jm', 1.13]]],
   ['Läpimenot', [
@@ -67,10 +72,12 @@ export const TES_NIMIKKEET = [
   ['Uusintasaumaus', [['Uusintasaumaus, elementit', 'jm', 3.61]]],
 ]
 export const findNimike = name => {
-  for (const [, items] of TES_NIMIKKEET) for (const it of items) if (it[0] === name) return { label: it[0], unit: it[1], tes: it[2] }
+  for (const [, items] of TES_NIMIKKEET) for (const it of items) if (it[0] === name) return { label: it[0], unit: it[1], tes: it[2], invoiceAs: it[3] || it[0] }
   return null
 }
-export const MATERIAL_UNITS = ['kpl', 'm', 'jm', 'l', 'rll', 'pkt', 'm²', 'kg']
+// Laskulla käytettävä nimike (tarkemmat leveydet yhdistyvät TES-nimikkeeseen)
+export const invoiceName = name => findNimike(name)?.invoiceAs || (name || '').trim()
+export const MATERIAL_UNITS = ['kpl', 'm', 'jm', 'l', 'dl', 'rll', 'pkt', 'm²', 'kg']
 
 
 // Senttipyöristys, joka ei kompastu liukulukuihin (0,94 × 1,75 = 1,645 → 1,65)
@@ -362,7 +369,7 @@ export function buildInvoice(entries, settings = DEFAULT_SETTINGS) {
         const price = unitPrice(l, e.multiplier)
         const q = num(l.maara)
         if (!q || !price) continue
-        const name = (l.tyolaji || 'Urakkatyö').trim()
+        const name = invoiceName(l.tyolaji) || 'Urakkatyö'
         add(cls, `u|${name}|${l.yksikko}|${price}|${site}`, { desc: `${name}${where}`, unit: l.yksikko || 'kpl', price, addQty: q }).entries.push(e)
       }
     } else if (num(e.hours) && num(e.hourly_rate)) {
@@ -433,6 +440,120 @@ export function invoiceText(clientName, invoice, settings = DEFAULT_SETTINGS, cl
     }
   }
   return rows.join('\n')
+}
+
+// --- Kopioitavat tekstit: UKKO-laskun rivit ja viesti tilaajan ryhmään ---------
+const unitOut = u => (u === 'jm' ? 'm' : u || '')
+const dm = d => { const x = new Date(d + 'T12:00:00'); return `${x.getDate()}.${x.getMonth() + 1}` }
+// "3.11 & 6.11.2026" tai "27.10, 28.10 & 30.10.2026"
+export function datesText(dates, withYear = true) {
+  const ds = [...new Set(dates)].sort()
+  if (!ds.length) return ''
+  const parts = ds.map(dm)
+  const head = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}` : parts[0]
+  return withYear ? `${head}.${ds[ds.length - 1].slice(0, 4)}` : head
+}
+// Tuntirivien nimet yhteen: "Siivous" ja "Siivous, tavaroiden siirtely" → jälkimmäinen
+function mergeNames(names) {
+  const u = [...new Set(names.map(n => (n || '').trim()).filter(Boolean))]
+  const keep = u.filter(n => !u.some(o => o !== n && o.toLowerCase().includes(n.toLowerCase())))
+  return keep.join(' & ')
+}
+// UKKO-laskun rivit: nimikkeet yhdistetään työmaista ja päivistä riippumatta,
+// ei asiakastietoja, ALV-tekstejä eikä materiaaleja (ne ovat UKKO:n laskupohjassa).
+export function buildUkkoRows(entries, settings = DEFAULT_SETTINGS) {
+  const rows = new Map()
+  const add = (key, base, qty) => {
+    const r = rows.get(key) || { ...base, qty: 0, names: [] }
+    r.qty = round2(r.qty + qty)
+    if (base.name) r.names.push(base.name)
+    rows.set(key, r)
+  }
+  for (const e of entries) {
+    if (e.kind === 'urakka') {
+      for (const l of e.lines || []) {
+        const q = num(l.maara), price = unitPrice(l, e.multiplier)
+        if (!q || !price) continue
+        if (l.hourly) add(`h|${price}`, { order: 1, unit: 'h', price, name: l.tyolaji || 'Tuntityö' }, q)
+        else { const n = invoiceName(l.tyolaji) || 'Urakkatyö'; add(`u|${n}|${unitOut(l.yksikko)}|${price}`, { order: 0, desc: n, unit: unitOut(l.yksikko), price }, q) }
+      }
+    } else if (num(e.hours) && num(e.hourly_rate)) {
+      const n = e.kind === 'konsultointi' ? 'Työturvallisuuskonsultointi' : (settings.invoiceTitle || 'Tuntityö')
+      add(`t|${e.kind}|${num(e.hourly_rate)}`, { order: 1, desc: n, unit: 'h', price: num(e.hourly_rate) }, num(e.hours))
+    }
+    if (e.km_billable && num(e.km) && num(e.km_rate)) add(`km|${num(e.km_rate)}`, { order: 2, desc: 'Kilometrikorvaus', unit: 'km', price: num(e.km_rate) }, num(e.km))
+    if (e.per_diem_billable && e.per_diem !== 'ei') {
+      const amount = e.per_diem === 'koko' ? num(settings.pdFull) : num(settings.pdPart)
+      if (amount) add(`pd|${e.per_diem}`, { order: 3, desc: PER_DIEM_LABELS[e.per_diem], unit: 'pv', price: amount }, 1)
+    }
+    if (num(e.travel_hours) && num(e.travel_rate)) add(`tt|${num(e.travel_rate)}`, { order: 3, desc: 'Matka-aika', unit: 'h', price: num(e.travel_rate) }, num(e.travel_hours))
+  }
+  return [...rows.values()]
+    .map(r => ({ desc: r.desc || mergeNames(r.names), unit: r.unit, price: r.price, qty: r.qty, total: round2(r.qty * r.price), order: r.order }))
+    .sort((a, b) => a.order - b.order)
+}
+export function ukkoText(entries, settings = DEFAULT_SETTINGS) {
+  const rows = buildUkkoRows(entries, settings)
+  const sites = [...new Set(entries.map(e => (e.site || '').trim()).filter(Boolean))]
+  const title = [settings.invoiceTitle || '', sites.join(', '), datesText(entries.map(e => e.work_date))].filter(Boolean).join(' ')
+  const out = [title, '']
+  for (const r of rows) out.push(`${r.desc}: ${fmtNum(r.qty)} ${r.unit} × ${fmtEur(r.price)} = ${fmtEur(r.total)}`)
+  out.push('', `Yhteensä alv 0: ${fmtEur(round2(rows.reduce((s, r) => s + r.total, 0)))}`)
+  return out.join('\n')
+}
+// Viesti tilaajan ryhmään: työmaittain, kohdittain, määrät ilman hintoja
+export function groupMessageText(entries) {
+  const bySite = new Map()
+  for (const e of [...entries].sort((a, b) => a.work_date.localeCompare(b.work_date))) {
+    const k = (e.site || e.client_name || '').trim()
+    if (!bySite.has(k)) bySite.set(k, [])
+    bySite.get(k).push(e)
+  }
+  const blocks = []
+  for (const [site, list] of bySite) {
+    const out = [`${site} ${datesText(list.map(e => e.work_date), false)}`]
+    const kohdat = new Map() // kohta → Map(nimike|yks → määrä)
+    const hours = new Map(), mats = new Map()
+    for (const e of list) {
+      for (const l of e.lines || []) {
+        const q = num(l.maara)
+        if (!q) continue
+        if (l.hourly || (l.yksikko === 'h' && e.kind !== 'urakka')) {
+          const n = (l.tyolaji || 'tunnit').trim()
+          hours.set(n.toLowerCase(), { name: n, qty: round2((hours.get(n.toLowerCase())?.qty || 0) + q) })
+          continue
+        }
+        const kohta = (l.kohta || '').trim()
+        if (!kohdat.has(kohta)) kohdat.set(kohta, new Map())
+        const m = kohdat.get(kohta), key = `${(l.tyolaji || 'Urakkatyö').trim()}|${unitOut(l.yksikko)}`
+        m.set(key, round2((m.get(key) || 0) + q))
+      }
+      for (const x of e.materials || []) {
+        const q = num(x.maara)
+        if (!q) continue
+        const key = `${(x.nimi || '').trim().toLowerCase()}|${x.yksikko}`
+        const cur = mats.get(key) || { name: (x.nimi || '').trim(), unit: x.yksikko, qty: 0 }
+        cur.qty = round2(cur.qty + q); mats.set(key, cur)
+      }
+    }
+    const ks = [...kohdat.keys()].sort((a, b) => (a ? 1 : 0) - (b ? 1 : 0)) // ilman kohtaa ensin
+    for (const k of ks) {
+      out.push('')
+      if (k) out.push(k)
+      for (const [key, q] of kohdat.get(k)) { const [n, u] = key.split('|'); out.push(`${n}: ${fmtNum(q)} ${u}`) }
+    }
+    if (mats.size) {
+      out.push('', 'Materiaalit')
+      for (const m of mats.values()) out.push(`${m.name}: ${fmtNum(m.qty)} ${m.unit}`)
+    }
+    const hrs = [...hours.values()]
+    if (hrs.length || list.some(e => num(e.km) > 0)) out.push('')
+    if (hrs.length) out.push(`Tunnit: ${fmtNum(round2(hrs.reduce((s, h) => s + h.qty, 0)))} h ${mergeNames(hrs.map(h => h.name)).toLowerCase()}`)
+    const kmDays = list.filter(e => num(e.km) > 0).length
+    if (kmDays) out.push(`Kilsat x${kmDays}`)
+    blocks.push(out.join('\n'))
+  }
+  return blocks.join('\n\n')
 }
 
 // Materiaalien kulutus työmaittain (myös ne, joita ei laskuteta)
@@ -568,5 +689,5 @@ export function entriesCSV(entries, settings = DEFAULT_SETTINGS) {
       n(e.km), e.km_billable ? 'kyllä' : 'ei', n(t.travel), n(t.total), PER_DIEM_LABELS[e.per_diem], n(t.perDiem),
       e.invoiced_at ? fmtDate(e.invoiced_at.slice(0, 10)) : '', e.notes].map(esc).join(';')
   })
-  return '\ufeff' + [head.join(';'), ...rows].join('\n')
+  return '﻿' + [head.join(';'), ...rows].join('\n')
 }
