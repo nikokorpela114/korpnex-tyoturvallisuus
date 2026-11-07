@@ -220,3 +220,74 @@ create policy "tt wl_invoices own" on public.wl_invoices for all
 
 -- Asiakaskohtainen urakan kerroin (TES-hinta × kerroin). Tyhjä = Asetusten oletus.
 alter table public.wl_clients add column if not exists multiplier numeric;
+
+-- ---------------------------------------------------------------------------
+-- 2026-11: luotettavuus
+--   wl_invoices.lines  = kopio laskun riveistä ja hinnoista laskutushetkellä
+--   wl_settings        = Työajat-asetukset tietokannassa (sama kaikilla laitteilla,
+--                        mm. vuosikohtaiset verovapaat korvaukset yearRates)
+--   tt_rate_limits     = tt-admin-funktion käyttörajat (vain service role)
+--   wl_mark_invoiced / wl_cancel_invoice = laskutus yhtenä toimintona (kaikki tai ei mitään)
+-- ---------------------------------------------------------------------------
+alter table public.wl_invoices add column if not exists lines jsonb;
+
+create table if not exists public.wl_settings (
+  user_id    uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  data       jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+revoke all on public.wl_settings from anon;
+grant select, insert, update on public.wl_settings to authenticated;
+alter table public.wl_settings enable row level security;
+drop policy if exists "tt wl_settings own" on public.wl_settings;
+create policy "tt wl_settings own" on public.wl_settings for all
+  using ((select tt_is_consultant()) and user_id = (select auth.uid()))
+  with check ((select tt_is_consultant()) and user_id = (select auth.uid()));
+
+create table if not exists public.tt_rate_limits (
+  key        text primary key,
+  hits       integer not null default 0,
+  window_at  timestamptz not null default now()
+);
+alter table public.tt_rate_limits enable row level security;
+revoke all on public.tt_rate_limits from anon, authenticated;
+
+create or replace function public.wl_mark_invoiced(
+  p_ids bigint[], p_client_name text, p_client_id bigint, p_number text,
+  p_date date, p_net numeric, p_vat numeric, p_lines jsonb
+) returns bigint
+language plpgsql security invoker set search_path = public as $$
+declare v_id bigint; n integer;
+begin
+  if not tt_is_consultant() then raise exception 'Ei oikeutta'; end if;
+  if coalesce(cardinality(p_ids), 0) = 0 then raise exception 'Ei laskutettavia päiviä'; end if;
+  insert into wl_invoices (client_name, client_id, invoice_number, invoice_date, net, vat, lines)
+  values (p_client_name, p_client_id, nullif(trim(coalesce(p_number, '')), ''), p_date, p_net, p_vat, p_lines)
+  returning id into v_id;
+  update work_entries
+     set invoiced_at = (p_date::timestamp + interval '12 hours') at time zone 'Europe/Helsinki',
+         invoice_id = v_id
+   where id = any(p_ids) and invoiced_at is null and not archived;
+  get diagnostics n = row_count;
+  if n <> cardinality(p_ids) then
+    raise exception 'Osa päivistä on jo laskutettu tai poistettu. Päivitä sivu ja yritä uudelleen.';
+  end if;
+  return v_id;
+end $$;
+
+create or replace function public.wl_cancel_invoice(p_invoice_id bigint, p_ids bigint[])
+returns void
+language plpgsql security invoker set search_path = public as $$
+begin
+  if not tt_is_consultant() then raise exception 'Ei oikeutta'; end if;
+  update work_entries set invoiced_at = null, invoice_id = null where id = any(p_ids);
+  if p_invoice_id is not null
+     and not exists (select 1 from work_entries where invoice_id = p_invoice_id) then
+    delete from wl_invoices where id = p_invoice_id;
+  end if;
+end $$;
+
+revoke all on function public.wl_mark_invoiced(bigint[], text, bigint, text, date, numeric, numeric, jsonb) from public, anon;
+revoke all on function public.wl_cancel_invoice(bigint, bigint[]) from public, anon;
+grant execute on function public.wl_mark_invoiced(bigint[], text, bigint, text, date, numeric, numeric, jsonb) to authenticated;
+grant execute on function public.wl_cancel_invoice(bigint, bigint[]) to authenticated;

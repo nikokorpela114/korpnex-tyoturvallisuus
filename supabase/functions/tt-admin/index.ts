@@ -4,6 +4,8 @@
 //
 //   Ilman kirjautumista:
 //     forgot      { email }                    salasanan palautuslinkki
+//                 (käyttöraja: sama osoite kerran 5 minuutissa, sama IP 10 kertaa tunnissa;
+//                  laskurit taulussa tt_rate_limits, johon vain tämä funktio pääsee)
 //
 //   Kuka tahansa kirjautunut:
 //     notify_ack  { observation_id }           asiakas kuittasi → viesti konsulteille
@@ -89,6 +91,21 @@ async function sendInvite(p: { email: string; name: string | null; client_name: 
   await sendMail([p.email], 'Tunnuksesi Korpnex Työturvallisuus -portaaliin', html)
 }
 
+// Käyttöraja: palauttaa false, jos avaimella on tehty yli max pyyntöä ikkunan aikana
+async function allow(key: string, max: number, windowSec: number) {
+  try {
+    const now = Date.now()
+    const { data } = await admin.from('tt_rate_limits').select('hits, window_at').eq('key', key).maybeSingle()
+    const fresh = !data || now - new Date(data.window_at).getTime() > windowSec * 1000
+    const hits = fresh ? 1 : Number(data.hits) + 1
+    await admin.from('tt_rate_limits').upsert({ key, hits, window_at: fresh ? new Date(now).toISOString() : data.window_at })
+    return hits <= max
+  } catch (e) {
+    console.error('rate limit', key, e)
+    return true // laskurin vika ei saa estää salasanan palautusta
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
@@ -101,7 +118,12 @@ Deno.serve(async (req) => {
     // --- Salasanan palautus (ei vaadi kirjautumista) -----------------------
     if (action === 'forgot') {
       const email = String(body.email || '').trim().toLowerCase()
-      if (email) {
+      const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0].trim() || 'tuntematon'
+      // Vanhat laskurit pois (yli vuorokauden)
+      await admin.from('tt_rate_limits').delete().lt('window_at', new Date(Date.now() - 86400000).toISOString())
+      const okIp = await allow(`forgot-ip:${ip}`, 10, 3600)
+      const okEmail = okIp && email ? await allow(`forgot:${email}`, 1, 300) : false
+      if (email && okIp && okEmail) {
         const { data: prof } = await admin.from('profiles').select('email, name').eq('email', email).maybeSingle()
         if (prof?.email) {
           const link = await passwordLink(prof.email)
