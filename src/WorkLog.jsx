@@ -22,7 +22,8 @@ import { sb } from './supabaseClient.js'
 import {
   loadSettings, saveSettings, DEFAULT_SETTINGS, KIND_LABELS, PER_DIEM_LABELS, UNITS, MATERIAL_UNITS, TES_NIMIKKEET, findNimike,
   buildMaterialUsage, materialUsageText,
-  num, round2, unitPrice, entryTotals, buildInvoice, invoiceText, buildTravelClaim, travelClaimText,
+  num, round2, unitPrice, entryTotals, buildInvoice, buildTravelClaim, travelClaimText,
+  buildUkkoRows, ukkoText, groupMessageText, datesText,
   monthKey, monthLabel, fmtEur, fmtNum, fmtDate,
   calcHours, suggestPerDiem, isOpenTrip, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
   periodRange, shiftPeriod, periodLabel, periodKey, PERIOD_LABELS,
@@ -376,7 +377,7 @@ export default function WorkLog({ showToast }) {
       lines: d.kind === 'urakka'
         ? d.lines.filter(l => num(l.maara) && num(l.tes)).map(l => l.hourly
           ? { tyolaji: (l.tyolaji || '').trim() || 'Tuntityö', maara: num(l.maara), yksikko: 'h', tes: num(l.tes), hourly: true }
-          : { tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'jm', tes: num(l.tes) })
+          : { tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'jm', tes: num(l.tes), ...((l.kohta || '').trim() ? { kohta: l.kohta.trim() } : {}) })
         : [],
       multiplier: num(d.multiplier) || DEFAULT_SETTINGS.multiplier,
       materials: (d.materials || []).filter(m => (m.nimi || '').trim() && num(m.maara))
@@ -700,7 +701,6 @@ export default function WorkLog({ showToast }) {
         const inv = buildInvoice(unbilled, settings)
         const billedTotal = round2(list.filter(e => e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0))
         const cl = clientById(list.find(e => e.site_id)?.site_id && sites.find(x => x.id === list.find(e => e.site_id).site_id)?.client_id) || clientByName(client)
-        const info = clientInfoLines(cl)
         return (
           <div key={client} className="kx-card kx-wl-invoice">
             <div className="kx-wl-invoice-head" style={unbilled.length ? undefined : { marginBottom: 0 }}>
@@ -710,55 +710,49 @@ export default function WorkLog({ showToast }) {
                   {unbilled.length ? `${unbilled.length} laskuttamatonta päivää` : 'Kaikki laskutettu'}
                   {billedTotal > 0 && ` · laskutettu ${fmtEur(billedTotal)}`}
                 </div>
-                {unbilled.length > 0 && (info.length
-                  ? <div className="kx-wl-period" style={{ marginTop: 3 }}>{info.join(' · ')}</div>
-                  : cl && <button className="kx-wl-linkbtn" onClick={() => setClientEdit(cl)}>⚠ Lisää asiakkaalle Y-tunnus ja laskutusosoite</button>)}
               </div>
               {unbilled.length > 0 && (
                 <div className="kx-wl-actions">
-                  <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(invoiceText(client, inv, settings, cl)) ? '✓ Laskurivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 Kopioi laskurivit</button>
+                  <button className="kx-btn-primary kx-btn-sm" onClick={async () => showToast(await copyText(ukkoText(unbilled, settings)) ? '✓ UKKO-rivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 UKKO-rivit</button>
+                  <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(groupMessageText(unbilled)) ? '✓ Viesti kopioitu' : '⚠ Kopiointi ei onnistunut')}>💬 Viesti ryhmään</button>
                   <button className="kx-btn-ghost kx-btn-sm" onClick={() => setInvoiceModal({ list: unbilled, client, cl, number: '', date: todayISO() })}>✓ Merkitse laskutetuksi</button>
                 </div>
               )}
             </div>
-            {['kaannetty', 'alv'].filter(c => inv[c]).map(cls => (
-              <div key={cls} className="kx-wl-group">
-                <div className="kx-wl-group-title">
-                  {cls === 'kaannetty' ? 'Rakentamispalvelu, alv 0 % (käännetty verovelvollisuus)' : `Palvelut, alv ${fmtNum(settings.vatPct, 1)} %`}
+            {unbilled.length > 0 && (() => {
+              // Sama sisältö kuin kopioitavassa UKKO-tekstissä: nimikkeet yhdistettynä
+              const rows = buildUkkoRows(unbilled, settings)
+              const net = round2(rows.reduce((s2, r) => s2 + r.total, 0))
+              const sitesTxt = [...new Set(unbilled.map(e => (e.site || '').trim()).filter(Boolean))].join(', ')
+              return (
+                <div className="kx-wl-group">
+                  <div className="kx-wl-group-title">{[settings.invoiceTitle, sitesTxt, datesText(unbilled.map(e => e.work_date))].filter(Boolean).join(' ')}</div>
+                  <div className="kx-table-wrap">
+                    <table className="kx-wl-table">
+                      <thead><tr><th>Tuote</th><th className="num">Määrä</th><th className="num">Hinta</th><th className="num">Veroton</th></tr></thead>
+                      <tbody>
+                        {rows.map((r, i) => (
+                          <tr key={i}>
+                            <td>{r.desc}</td>
+                            <td className="num">{fmtNum(r.qty)} {r.unit}</td>
+                            <td className="num">{fmtEur(r.price)}</td>
+                            <td className="num">{fmtEur(r.total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr><td colSpan={3}>Yhteensä alv 0</td><td className="num">{fmtEur(net)}</td></tr>
+                        {inv.alv && <tr className="kx-wl-sub"><td colSpan={3}>Konsultoinnista ALV {fmtNum(settings.vatPct, 1)} %</td><td className="num">{fmtEur(inv.alv.vat)}</td></tr>}
+                      </tfoot>
+                    </table>
+                  </div>
+                  <details className="kx-wl-msgprev">
+                    <summary>💬 Näytä viesti ryhmään</summary>
+                    <pre>{groupMessageText(unbilled)}</pre>
+                  </details>
                 </div>
-                <div className="kx-table-wrap">
-                  <table className="kx-wl-table">
-                    <thead><tr><th>Rivi</th><th className="num">Määrä</th><th className="num">À-hinta</th><th className="num">Yhteensä</th></tr></thead>
-                    <tbody>
-                      {inv[cls].lines.map((l, i) => (
-                        <tr key={i}>
-                          <td>{l.desc}<div className="kx-wl-period">{l.period}</div></td>
-                          <td className="num">{fmtNum(l.qty)} {l.unit}</td>
-                          <td className="num">{fmtEur(l.price)}</td>
-                          <td className="num">{fmtEur(l.total)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr><td colSpan={3}>Yhteensä alv 0</td><td className="num">{fmtEur(inv[cls].net)}</td></tr>
-                      {cls === 'alv' && <tr className="kx-wl-sub"><td colSpan={3}>ALV {fmtNum(settings.vatPct, 1)} % · verollinen {fmtEur(inv[cls].gross)}</td><td className="num">{fmtEur(inv[cls].vat)}</td></tr>}
-                    </tfoot>
-                  </table>
-                </div>
-                {cls === 'kaannetty' && <div className="kx-hint">Laskulle: ALV 0 %, merkintä "Käännetty verovelvollisuus, AVL 8 c §" ja asiakkaan Y-tunnus.</div>}
-              </div>
-            ))}
-            {inv.materials && (
-              <div className="kx-wl-group">
-                <div className="kx-wl-group-title">Käytetyt materiaalit (tilaajan omat, ei laskuteta)</div>
-                <div className="kx-wl-matlist">
-                  {inv.materials.map((r, i) => (
-                    <div key={i}><span>{r.name}{inv.materials.some(x => x.site !== r.site) ? ` · ${r.site}` : ''}</span><b>{fmtNum(r.qty)} {r.unit}</b></div>
-                  ))}
-                </div>
-                <div className="kx-hint">Mukana kopioiduissa laskuriveissä, jotta tilaaja voi laskuttaa materiaalit eteenpäin.</div>
-              </div>
-            )}
+              )
+            })()}
             {(() => {
               // Tämän jakson laskutetut päivät laskuittain
               const billed = list.filter(e => e.invoiced_at)
@@ -783,7 +777,11 @@ export default function WorkLog({ showToast }) {
                             {' '}{fmtDate((invc?.invoice_date || es[0].invoiced_at).slice(0, 10))} · {es.length} pv · {fmtEur(sum)}
                             {invc && invc.net !== sum && <span className="kx-wl-period"> (koko lasku {fmtEur(invc.net)})</span>}
                           </span>
-                          <button className="kx-wl-linkbtn" style={{ marginTop: 0, color: '#475569' }} onClick={() => cancelInvoice(invc, es)}>↩ Peru</button>
+                          <span className="kx-wl-invbtns">
+                            <button className="kx-wl-linkbtn" style={{ marginTop: 0 }} onClick={async () => showToast(await copyText(ukkoText(es, settings)) ? '✓ UKKO-rivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 UKKO</button>
+                            <button className="kx-wl-linkbtn" style={{ marginTop: 0 }} onClick={async () => showToast(await copyText(groupMessageText(es)) ? '✓ Viesti kopioitu' : '⚠ Kopiointi ei onnistunut')}>💬 Viesti</button>
+                            <button className="kx-wl-linkbtn" style={{ marginTop: 0, color: '#475569' }} onClick={() => cancelInvoice(invc, es)}>↩ Peru</button>
+                          </span>
                         </div>
                       )
                     })}
@@ -963,6 +961,7 @@ export default function WorkLog({ showToast }) {
             ))}
             <div id="kx-wl-travelinfo" className="kx-wl-section-title" style={{ gridColumn: '1 / -1', marginTop: 8 }}>Matkalaskun tiedot (UKKO-pohja)</div>
             {[
+              ['invoiceTitle', 'Laskun otsikon alku (UKKO)', 'esim. Kiireapu'],
               ['travelName', 'Nimi', 'Etunimi Sukunimi'],
               ['vehicle', 'Auton rekisterinumero', 'ABC-123'],
               ['homeAddress', 'Kotiosoite (reitin alku ja loppu)', 'Katu 1, 60100 Seinäjoki'],
@@ -1115,6 +1114,7 @@ export default function WorkLog({ showToast }) {
               <div className="kx-wl-lines">
                 <datalist id="kx-wl-tyolajit">{TYOLAJIT.map(t => <option key={t} value={t} />)}</datalist>
                 <datalist id="kx-wl-tuntilajit">{TUNTILAJIT.map(t => <option key={t} value={t} />)}</datalist>
+                <datalist id="kx-wl-kohdat">{[...new Set(draft.lines.map(l => (l.kohta || '').trim()).filter(Boolean))].map(t => <option key={t} value={t} />)}</datalist>
                 <div className="kx-wl-line kx-wl-line-head" aria-hidden="true">
                   <span className="kx-wl-line-name">Nimike</span><span>Määrä</span><span>Yks.</span><span>TES €/yks.</span><span>Laskutus</span>
                 </div>
@@ -1136,6 +1136,7 @@ export default function WorkLog({ showToast }) {
                           <option value="__custom">✏️ Muu työlaji (kirjoita)</option>
                         </select>
                         {custom && <input className="kx-input kx-input-sm" list="kx-wl-tyolajit" placeholder="Työlaji" value={l.tyolaji} autoFocus={l._custom && !l.tyolaji} onChange={e => setLine(i, 'tyolaji', e.target.value)} />}
+                        <input className="kx-input kx-input-sm kx-wl-kohta" list="kx-wl-kohdat" placeholder="Kohta / osasto (vapaaehtoinen)" aria-label="Kohta" value={l.kohta || ''} onChange={e => setLine(i, 'kohta', e.target.value)} />
                       </div>
                       <input className="kx-input kx-input-sm" inputMode="decimal" placeholder="Määrä" aria-label="Määrä" value={l.maara} onChange={e => setLine(i, 'maara', e.target.value)} />
                       <select className="kx-input kx-input-sm" aria-label="Yksikkö" value={l.yksikko} onChange={e => setLine(i, 'yksikko', e.target.value)}>
@@ -1148,7 +1149,7 @@ export default function WorkLog({ showToast }) {
                   )
                 })}
                 <div className="kx-wl-lines-foot">
-                  <button className="kx-btn-ghost kx-btn-sm" onClick={() => setD('lines', [...draft.lines, emptyLine()])}>＋ Rivi</button>
+                  <button className="kx-btn-ghost kx-btn-sm" onClick={() => setD('lines', [...draft.lines, { ...emptyLine(), kohta: [...draft.lines].reverse().find(l => !l.hourly)?.kohta || '' }])}>＋ Rivi</button>
                   <label className="kx-wl-inline">
                     Kerroin
                     <input className="kx-input kx-input-sm" style={{ width: 70 }} inputMode="decimal" value={draft.multiplier} onChange={e => setD('multiplier', e.target.value)} />
@@ -1410,7 +1411,12 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
 .kx-wl-billed-laskuttamatta { color: #b45309 !important; }
 .kx-wl-billed-ei { color: #94a3b8 !important; }
 .kx-wl-rowhours { display: block; font-size: 11px; font-weight: 600; color: #64748b; }
-.kx-wl-invrow { align-items: center; }
+.kx-wl-invrow { align-items: center; flex-wrap: wrap; }
+.kx-wl-invbtns { display: inline-flex; gap: 12px; }
+.kx-wl-invbtns .kx-wl-linkbtn { color: #0878E8; }
+.kx-wl-msgprev { margin-top: 10px; font-size: 13px; }
+.kx-wl-msgprev summary { cursor: pointer; color: #0878E8; font-weight: 600; }
+.kx-wl-msgprev pre { white-space: pre-wrap; font-family: inherit; background: #f4f6fa; border-radius: 10px; padding: 10px 12px; margin: 8px 0 0; color: #0f172a; }
 .kx-wl-older .kx-btn-ghost { background: #fff; }
 @media (max-width: 640px) {
   .kx-wl-periodseg { width: 100%; min-width: 0; }
@@ -1513,6 +1519,7 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
 .kx-wl-line.kx-wl-hourline { grid-template-columns: minmax(0, 2fr) 76px 76px minmax(0, 1fr) 28px; }
 .kx-wl-line-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .kx-wl-line-pick select { min-width: 0; width: 100%; }
+.kx-wl-kohta { font-size: 12.5px; color: #475569; }
 .kx-wl-line.kx-wl-mat > .kx-icon-btn { grid-row: auto; grid-column: auto; }
 .kx-wl-line-head { font-size: 11.5px; font-weight: 600; color: #64748b; margin-bottom: -4px; }
 .kx-wl-line-head > span:last-child { grid-column: span 2; }
