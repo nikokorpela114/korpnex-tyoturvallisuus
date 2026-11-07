@@ -382,6 +382,13 @@ export function amountsSummary(e) {
   const parts = (e?.lines || []).map(l => `${fmtNum(num(l.maara))} ${l.yksikko} ${l.hourly ? (l.tyolaji || 'tunteja').toLowerCase() : shortName(l.tyolaji)}`)
   return parts.join(', ')
 }
+// Keskeneräiset määrät talteen puhelimeen, jos tallennus ei mene läpi (huono kuuluvuus).
+// Luonnos poistetaan vasta, kun tallennus kantaan onnistuu.
+const draftKey = id => `korpnex_tt_amounts_draft_${id}`
+const readAmountsDraft = id => { try { const r = localStorage.getItem(draftKey(id)); return r ? JSON.parse(r) : null } catch { return null } }
+const writeAmountsDraft = (id, v) => { try { localStorage.setItem(draftKey(id), JSON.stringify(v)) } catch { /* ei tilaa */ } }
+const clearAmountsDraft = id => { try { localStorage.removeItem(draftKey(id)) } catch { /* ok */ } }
+export const hasAmountsDraft = id => !!readAmountsDraft(id)
 const shortName = n => String(n || '').replace(/^Elementti- ja ikkunasauma/, 'elem.sauma').replace(/^Läpimeno, /, 'läpimeno ').toLowerCase()
 
 function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, showToast }) {
@@ -390,12 +397,28 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
   const hourRate = num(client?.hourly_rate) || num(entry.hourly_rate) || num(settings.hourlyRate)
   const multiplier = num(entry.multiplier) || num(settings.multiplier) || 1.75
   const emptyU = () => ({ tyolaji: '', maara: '', yksikko: 'jm', tes: '' })
-  const [lines, setLines] = useState(() => {
+  const fromEntry = () => {
     const ls = (entry.lines || []).map(l => ({ ...l, maara: sstr(l.maara), tes: sstr(l.tes) }))
-    return ls.some(l => !l.hourly) || ls.length ? ls : [emptyU()]
-  })
-  const [mats, setMats] = useState(() => (entry.materials || []).map(m => ({ ...m, maara: sstr(m.maara) })))
+    return {
+      lines: ls.some(l => !l.hourly) || ls.length ? ls : [emptyU()],
+      mats: (entry.materials || []).map(m => ({ ...m, maara: sstr(m.maara) })),
+    }
+  }
+  const [stored] = useState(() => readAmountsDraft(entry.id))
+  const [restored, setRestored] = useState(!!stored)
+  const [lines, setLinesRaw] = useState(() => stored?.lines || fromEntry().lines)
+  const [mats, setMatsRaw] = useState(() => stored?.mats || fromEntry().mats)
   const [busy, setBusy] = useState(false)
+  const [touched, setTouched] = useState(false)
+  // Jokainen muutos talteen puhelimeen heti, ettei mitään katoa vaikka sivu sulkeutuisi
+  const setLines = f => { setTouched(true); setLinesRaw(f) }
+  const setMats = f => { setTouched(true); setMatsRaw(f) }
+  useEffect(() => { if (touched) writeAmountsDraft(entry.id, { lines, mats, at: Date.now() }) }, [touched, lines, mats, entry.id])
+  function discardDraft() {
+    clearAmountsDraft(entry.id)
+    const f = fromEntry()
+    setLinesRaw(f.lines); setMatsRaw(f.mats); setRestored(false); setTouched(false)
+  }
   const setL = (i, k, v) => setLines(ls => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)))
   const setM = (i, k, v) => setMats(ms => ms.map((m, j) => (j === i ? { ...m, [k]: v } : m)))
   function pick(i, v) {
@@ -418,10 +441,19 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
     const upd = { lines: clean, materials }
     // Urakkarivit → kirjaus urakaksi (tunnit lasketaan silti kellonajoista tiedoksi)
     if (clean.some(l => !l.hourly) && entry.kind !== 'urakka') { upd.kind = 'urakka'; upd.hours = 0; upd.hourly_rate = 0; upd.multiplier = multiplier }
+    writeAmountsDraft(entry.id, { lines, mats, at: Date.now() })
     setBusy(true)
-    const { error } = await sb.from('work_entries').update(upd).eq('id', entry.id)
+    let error = null
+    try { ({ error } = await sb.from('work_entries').update(upd).eq('id', entry.id)) } catch (e) { error = e }
     setBusy(false)
-    if (error) { dbError(error, showToast); return }
+    if (error) {
+      console.error('amounts save failed:', error)
+      showToast(/column|schema cache/i.test(error?.message || '')
+        ? '⚠ Tietokanta pitää päivittää: aja supabase/tyoajat.sql uudelleen'
+        : '⚠ Ei yhteyttä? Määrät ovat tallessa puhelimessa, yritä hetken päästä uudelleen')
+      return
+    }
+    clearAmountsDraft(entry.id)
     showToast('✓ Määrät tallennettu päivälle')
     onSaved()
   }
@@ -434,6 +466,12 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
       <div className="kx-wl-clientinfo"><b>{entry.client_name}{entry.site ? `, ${entry.site}` : ''}</b>
         <div className="kx-wl-period">Tallentuu käynnissä olevaan päivään. Voit lisätä ja korjata määriä koko päivän ajan.</div>
       </div>
+      {restored && (
+        <div className="kx-wl-warn">
+          Palautettu tallentamattomat määrät{stored?.at ? ` (${new Date(stored.at).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit' })})` : ''}. Tallenna ne, kun yhteys toimii.
+          {' '}<button className="kx-wl-linkbtn" style={{ marginTop: 0 }} onClick={discardDraft}>Hylkää ja näytä tallennetut</button>
+        </div>
+      )}
 
       <div className="kx-wl-section-title">Urakka</div>
       <div className="kx-day-amounts">
@@ -587,6 +625,9 @@ export function DayPanel({ live, sites, clients, settings, makeEntryRow, onChang
             {e.break_minutes ? ` · tauko ${e.break_minutes} min` : ''}
             {e.live?.break_start && !e.end_time ? ` · tauolla klo ${fmtTime(e.live.break_start)} alkaen` : ''}
             {phase === 'tarkistus' && num(e.km) > 0 ? ` · ${fmtNum(e.km)} km` : ''}
+            {hasAmountsDraft(e.id) && (
+              <div className="kx-day-amountsum"><button className="kx-wl-linkbtn" style={{ color: '#b45309' }} onClick={() => setAmountsFor(e.id)}>⚠ Tallentamattomia määriä puhelimessa, tallenna nyt</button></div>
+            )}
             {hasAmounts(e)
               ? <div className="kx-day-amountsum">📏 {amountsSummary(e) || 'materiaalit kirjattu'} <button className="kx-wl-linkbtn" onClick={() => setAmountsFor(e.id)}>muokkaa</button></div>
               : e.start_time && e !== cur && <div className="kx-day-amountsum"><button className="kx-wl-linkbtn" onClick={() => setAmountsFor(e.id)}>📏 Kirjaa määrät tälle työmaalle</button></div>}
