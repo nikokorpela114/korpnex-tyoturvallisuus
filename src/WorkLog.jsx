@@ -13,6 +13,11 @@
 // Laskutus-välilehti: "Laskuttamatta nyt" (kaikki laskuttamattomat jaksosta
 // riippumatta, viikkolaskutukseen) tai "Jakso" (raportit, matkalasku, materiaalit).
 // Päivä käynnissä -napit toimivat ilman verkkoa (dayOutbox.js).
+// Asetukset tallentuvat tietokantaan (wl_settings), joten puhelin ja kone
+// käyttävät samoja. Verovapaat korvaukset ovat vuosikohtaiset (yearRates).
+// Laskutetuksi merkintä ja peruminen ovat yksi tietokantatoiminto
+// (wl_mark_invoiced / wl_cancel_invoice): kaikki tai ei mitään.
+// Laskutus ryhmitellään asiakkaan ID:n mukaan (työmaan asiakas), ei nimen.
 // Laskenta on src/worklog.js:ssä. Tietokanta: supabase/tyoajat.sql (RLS:
 // vain kirjautunut konsultti näkee omat rivinsä, asiakasportaalissa ei koskaan).
 // Näytetään omana osionaan WorkApp.jsx:ssä (/?tyoajat). Välilehdet: Kirjaukset,
@@ -26,7 +31,8 @@ import {
   loadSettings, saveSettings, DEFAULT_SETTINGS, KIND_LABELS, PER_DIEM_LABELS, UNITS, MATERIAL_UNITS, TES_NIMIKKEET, findNimike,
   buildMaterialUsage, materialUsageText,
   num, round2, unitPrice, entryTotals, buildInvoice, buildTravelClaim, travelClaimText,
-  buildUkkoRows, ukkoText, groupMessageText, datesText,
+  buildUkkoRows, ukkoGroups, ukkoText, groupMessageText, datesText,
+  mergeDbSettings, rateTable, yearRates, RATE_KEYS,
   monthKey, monthLabel, fmtEur, fmtNum, fmtDate,
   calcHours, suggestPerDiem, isOpenTrip, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
   periodRange, shiftPeriod, periodLabel, periodKey, PERIOD_LABELS,
@@ -93,6 +99,7 @@ export default function WorkLog({ showToast }) {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [settings, setSettings] = useState(loadSettings)
+  const [settingsRev, setSettingsRev] = useState(0) // kasvaa, kun asetukset tulevat kannasta (lomake päivittyy)
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -233,24 +240,63 @@ export default function WorkLog({ showToast }) {
   const materialNames = useMemo(() => [...new Set(entries.flatMap(e => (e.materials || []).map(m => m.nimi)).filter(Boolean))], [entries])
   const siteNames = useMemo(() => [...new Set(recent.map(r => r.site).filter(Boolean))], [recent])
 
+  // Asetukset: puhelimen välimuisti + tietokanta (sama kaikilla laitteilla)
+  async function saveSettingsDb(next) {
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      if (!session?.user?.id) return
+      const { error } = await sb.from('wl_settings').upsert({ user_id: session.user.id, data: next, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+      if (error) console.warn('wl_settings save failed:', error)
+    } catch (e) { console.warn('wl_settings save failed:', e) }
+  }
+  function persistSettings(next) {
+    saveSettings(next)
+    saveSettingsDb(next)
+    return next
+  }
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await sb.from('wl_settings').select('data').maybeSingle()
+      if (error) return // ei yhteyttä tai taulua → käytetään puhelimen asetuksia
+      if (data?.data && Object.keys(data.data).length) {
+        const s = mergeDbSettings(data.data)
+        saveSettings(s); setSettings(s); setSettingsRev(r => r + 1)
+      } else {
+        saveSettingsDb(loadSettings()) // ensimmäinen kerta: tämän laitteen asetukset kantaan
+      }
+    })()
+  }, [])
   function updateTextSetting(key, value) {
-    setSettings(prev => {
-      const next = { ...prev, [key]: String(value || '').trim() }
-      saveSettings(next)
-      return next
-    })
+    setSettings(prev => persistSettings({ ...prev, [key]: String(value || '').trim() }))
   }
   function updateSetting(key, value) {
+    setSettings(prev => persistSettings({ ...prev, [key]: num(value) }))
+  }
+  function updateYearRate(year, key, value) {
     setSettings(prev => {
-      const next = { ...prev, [key]: num(value) }
-      saveSettings(next)
-      return next
+      const table = rateTable(prev)
+      return persistSettings({ ...prev, yearRates: { ...(prev.yearRates || {}), [year]: { ...table[year], [key]: num(value) } } })
+    })
+  }
+  function addRateYear() {
+    setSettingsRev(r => r + 1)
+    setSettings(prev => {
+      const table = rateTable(prev)
+      const years = Object.keys(table).sort()
+      const last = years[years.length - 1]
+      const next = String(Number(last) + 1)
+      return persistSettings({ ...prev, yearRates: { ...(prev.yearRates || {}), [next]: { ...table[last] } } })
     })
   }
 
   // --- Lomake ---------------------------------------------------------------
   const clientById = (id, list = clients) => list.find(c => c.id === id) || null
   const clientByName = name => clients.find(c => !c.archived && c.name.trim().toLowerCase() === (name || '').trim().toLowerCase()) || null
+  // Kirjauksen asiakas: työmaan asiakas (ID), muuten nimellä löytyvä asiakas
+  const clientOfEntry = e => {
+    const site = e.site_id && sites.find(x => x.id === e.site_id)
+    return (site && clientById(site.client_id)) || clients.find(c => c.name.trim().toLowerCase() === (e.client_name || '').trim().toLowerCase()) || null
+  }
 
   // Työmaan valinta täyttää asiakkaan, ALV:n, km:t ja hinnat
   function applySite(d, site, ctx = {}) {
@@ -535,36 +581,32 @@ export default function WorkLog({ showToast }) {
     showToast('🗑 Merkintä poistettu'); setDraft(null); load()
   }
 
-  // Laskutetuksi merkintä: luo laskun (wl_invoices) numerolla ja päivällä ja linkittää
-  // päivät siihen. Jos taulua ei vielä ole, merkitään pelkkä laskutuspäivä kuten ennen.
+  // Lasku ja päivien merkintä tallentuvat yhtenä toimintona (wl_mark_invoiced):
+  // joko molemmat onnistuvat tai ei kumpikaan. Laskulle tallentuu kopio riveistä
+  // ja hinnoista laskutushetkellä.
   async function markInvoiced({ list, client, cl, number, date }) {
     const inv = buildInvoice(list, settings)
     const net = round2((inv.kaannetty?.net || 0) + (inv.alv?.net || 0))
     const vat = round2(inv.alv?.vat || 0)
-    const at = new Date(`${date}T12:00:00`).toISOString()
-    let invoiceId = null
-    const ins = await sb.from('wl_invoices').insert([{
-      client_name: client, client_id: cl?.id || null, invoice_number: (number || '').trim() || null,
-      invoice_date: date, net, vat,
-    }]).select()
-    if (!ins.error) invoiceId = ins.data?.[0]?.id ?? null
-    else console.warn('wl_invoices insert failed (aja tyoajat.sql):', ins.error)
-    const upd = invoiceId ? { invoiced_at: at, invoice_id: invoiceId } : { invoiced_at: at }
-    const { error } = await sb.from('work_entries').update(upd).in('id', list.map(e => e.id))
-    if (error) { showToast('⚠ Tallennus epäonnistui'); return false }
+    const rows = buildUkkoRows(list, settings)
+    const { error } = await sb.rpc('wl_mark_invoiced', {
+      p_ids: list.map(e => e.id), p_client_name: client, p_client_id: cl?.id || null,
+      p_number: (number || '').trim(), p_date: date, p_net: net, p_vat: vat,
+      p_lines: { rows, groups: ukkoGroups(rows, settings), dates: list.map(e => e.work_date).sort(), text: ukkoText(list, settings), vatPct: settings.vatPct },
+    })
+    if (error) {
+      console.error('wl_mark_invoiced failed:', error)
+      if (/jo laskutettu|poistettu/i.test(error.message || '')) { showToast('⚠ ' + error.message); load() }
+      else showToast(/function|schema cache/i.test(error.message || '') ? '⚠ Tietokanta pitää päivittää: aja supabase/tyoajat.sql' : '⚠ Tallennus epäonnistui, mitään ei merkitty laskutetuksi')
+      return false
+    }
     showToast(`✓ Merkitty laskutetuksi${number ? ` (lasku ${number})` : ''}`); load()
     return true
   }
   async function cancelInvoice(invoice, list) {
     if (!window.confirm(`Perutaanko laskutus${invoice?.invoice_number ? ` (lasku ${invoice.invoice_number})` : ''}? ${list.length} päivää palaa laskuttamattomiksi.`)) return
-    const ids = list.map(e => e.id)
-    const upd = 'invoice_id' in (list[0] || {}) ? { invoiced_at: null, invoice_id: null } : { invoiced_at: null }
-    const { error } = await sb.from('work_entries').update(upd).in('id', ids)
-    if (error) { showToast('⚠ Peruminen epäonnistui'); return }
-    if (invoice?.id) {
-      const { count } = await sb.from('work_entries').select('id', { count: 'exact', head: true }).eq('invoice_id', invoice.id)
-      if (!count) await sb.from('wl_invoices').delete().eq('id', invoice.id)
-    }
+    const { error } = await sb.rpc('wl_cancel_invoice', { p_invoice_id: invoice?.id ?? null, p_ids: list.map(e => e.id) })
+    if (error) { console.error('wl_cancel_invoice failed:', error); showToast('⚠ Peruminen epäonnistui'); return }
     showToast('↩ Laskutus peruttu'); load()
   }
 
@@ -600,17 +642,21 @@ export default function WorkLog({ showToast }) {
 
   // --- Kuukauden yhteenvedot -------------------------------------------------
   const byClient = useMemo(() => {
+    // Ryhmittely asiakkaan ID:n mukaan: samanniminen asiakas ei sekoitu, ja
+    // asiakkaan nimen muuttaminen ei jaa historiaa kahtia
     const m = new Map()
     const src = billView === 'nyt' ? unbilledAll : entries
     for (const e of src.filter(isBillable)) {
-      const k = e.client_name
-      if (!m.has(k)) m.set(k, [])
-      m.get(k).push(e)
+      const cl = clientOfEntry(e)
+      const k = cl ? `c${cl.id}` : `n:${(e.client_name || '').trim().toLowerCase()}`
+      if (!m.has(k)) m.set(k, { name: cl?.name || e.client_name, cl, list: [] })
+      m.get(k).list.push(e)
     }
     // Laskuttamattomat asiakkaat ensin, kokonaan laskutetut perään
-    const open = list => list.some(e => !e.invoiced_at && isBillable(e)) ? 0 : 1
-    return [...m.entries()].sort((a, b) => open(a[1]) - open(b[1]) || a[0].localeCompare(b[0], 'fi'))
-  }, [entries, unbilledAll, billView])
+    const open = g => g.list.some(e => !e.invoiced_at && isBillable(e)) ? 0 : 1
+    return [...m.entries()].sort((a, b) => open(a[1]) - open(b[1]) || a[1].name.localeCompare(b[1].name, 'fi'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, unbilledAll, billView, clients, sites])
   const claim = useMemo(() => buildTravelClaim(entries, settings, trips), [entries, settings, trips])
   const usage = useMemo(() => buildMaterialUsage(entries), [entries])
   const monthTotal = round2(entries.filter(isBillable).reduce((s, e) => s + entryTotals(e, settings).total, 0))
@@ -771,13 +817,11 @@ export default function WorkLog({ showToast }) {
 
       {tab === 'laskutus' && <>
       {/* 1) Laskutettavaa asiakkaittain */}
-      {byClient.map(([client, list]) => {
+      {byClient.map(([groupKey, { name: client, cl, list }]) => {
         const unbilled = list.filter(e => !e.invoiced_at)
-        const inv = buildInvoice(unbilled, settings)
         const billedTotal = round2(list.filter(e => e.invoiced_at).reduce((s, e) => s + entryTotals(e, settings).total, 0))
-        const cl = clientById(list.find(e => e.site_id)?.site_id && sites.find(x => x.id === list.find(e => e.site_id).site_id)?.client_id) || clientByName(client)
         return (
-          <div key={client} className="kx-card kx-wl-invoice">
+          <div key={groupKey} className="kx-card kx-wl-invoice">
             <div className="kx-wl-invoice-head" style={unbilled.length ? undefined : { marginBottom: 0 }}>
               <div>
                 <div className="kx-card-title" style={{ margin: 0 }}>{client}</div>
@@ -802,7 +846,11 @@ export default function WorkLog({ showToast }) {
             {unbilled.length > 0 && (() => {
               // Sama sisältö kuin kopioitavassa UKKO-tekstissä: nimikkeet yhdistettynä
               const rows = buildUkkoRows(unbilled, settings)
-              const net = round2(rows.reduce((s2, r) => s2 + r.total, 0))
+              const groups = ukkoGroups(rows, settings)
+              // Eri verokäsittelyt omina ryhminään (esim. urakka käännetyllä ALV:lla + konsultointi 25,5 %)
+              const mixed = groups.length > 1 || groups[0]?.vat === 'alv'
+              const net = round2(groups.reduce((s2, g) => s2 + g.net, 0))
+              const vatEur = round2(groups.reduce((s2, g) => s2 + g.vatEur, 0))
               const sitesTxt = [...new Set(unbilled.map(e => (e.site || '').trim()).filter(Boolean))].join(', ')
               return (
                 <div className="kx-wl-group">
@@ -811,18 +859,34 @@ export default function WorkLog({ showToast }) {
                     <table className="kx-wl-table">
                       <thead><tr><th>Tuote</th><th className="num">Määrä</th><th className="num">Hinta</th><th className="num">Veroton</th></tr></thead>
                       <tbody>
-                        {rows.map((r, i) => (
-                          <tr key={i}>
-                            <td>{r.desc}</td>
-                            <td className="num">{fmtNum(r.qty)} {r.unit}</td>
-                            <td className="num">{fmtEur(r.price)}</td>
-                            <td className="num">{fmtEur(r.total)}</td>
-                          </tr>
+                        {groups.map(g => (
+                          <React.Fragment key={g.vat}>
+                            {mixed && <tr className="kx-wl-vathead"><td colSpan={4}>{g.title}</td></tr>}
+                            {g.rows.map((r, i) => (
+                              <tr key={i}>
+                                <td>{r.desc}</td>
+                                <td className="num">{fmtNum(r.qty)} {r.unit}</td>
+                                <td className="num">{fmtEur(r.price)}</td>
+                                <td className="num">{fmtEur(r.total)}</td>
+                              </tr>
+                            ))}
+                            {mixed && (
+                              <tr className="kx-wl-vatsum">
+                                <td colSpan={3}>{g.vat === 'kaannetty' ? 'Yhteensä alv 0 (käännetty ALV)' : `Veroton ${fmtEur(g.net)} + ALV ${fmtNum(settings.vatPct, 1)} %`}</td>
+                                <td className="num">{fmtEur(g.vat === 'kaannetty' ? g.net : g.vatEur)}</td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         ))}
                       </tbody>
                       <tfoot>
-                        <tr><td colSpan={3}>Yhteensä alv 0</td><td className="num">{fmtEur(net)}</td></tr>
-                        {inv.alv && <tr className="kx-wl-sub"><td colSpan={3}>Konsultoinnista ALV {fmtNum(settings.vatPct, 1)} %</td><td className="num">{fmtEur(inv.alv.vat)}</td></tr>}
+                        {!mixed
+                          ? <tr><td colSpan={3}>Yhteensä alv 0</td><td className="num">{fmtEur(net)}</td></tr>
+                          : <>
+                            <tr><td colSpan={3}>Veroton yhteensä</td><td className="num">{fmtEur(net)}</td></tr>
+                            <tr className="kx-wl-sub"><td colSpan={3}>ALV yhteensä</td><td className="num">{fmtEur(vatEur)}</td></tr>
+                            <tr><td colSpan={3}>Laskun loppusumma</td><td className="num">{fmtEur(round2(net + vatEur))}</td></tr>
+                          </>}
                       </tfoot>
                     </table>
                   </div>
@@ -1020,7 +1084,7 @@ export default function WorkLog({ showToast }) {
 
       {/* Asetukset */}
       {tab === 'asetukset' && (
-      <div className="kx-card">
+      <div className="kx-card" key={settingsRev}>
         <div className="kx-card-title" style={{ margin: 0 }}>Oletushinnat</div>
         {(
           <div className="kx-wl-grid" style={{ marginTop: 14 }}>
@@ -1029,9 +1093,6 @@ export default function WorkLog({ showToast }) {
               ['consultRate', 'Konsultointi €/h (alv 0)'],
               ['multiplier', 'Urakan kerroin (TES-hinta ×)'],
               ['kmRate', 'Km-hinta asiakkaalle €/km'],
-              ['ownKmRate', 'Oma km-korvaus €/km (verovapaa)'],
-              ['pdPart', 'Osapäiväraha €'],
-              ['pdFull', 'Kokopäiväraha €'],
               ['vatPct', 'ALV % (konsultointi)'],
             ].map(([k, label]) => (
               <label key={k} className="kx-wl-field">
@@ -1039,6 +1100,31 @@ export default function WorkLog({ showToast }) {
                 <input className="kx-input" inputMode="decimal" defaultValue={str(settings[k])} onBlur={e => updateSetting(k, e.target.value)} />
               </label>
             ))}
+            <div className="kx-wl-section-title" style={{ gridColumn: '1 / -1', marginTop: 8 }}>Verovapaat korvaukset vuosittain (oma matkalasku)</div>
+            {(() => {
+              const table = rateTable(settings)
+              const years = Object.keys(table).sort().reverse()
+              const cur = yearRates(settings, todayISO())
+              return <>
+                {cur.fallback && (
+                  <div className="kx-wl-warn kx-wl-wide">Vuoden {cur.year} määriä ei ole vielä lisätty. Vuoden {cur.year} päivät lasketaan vuoden {cur.from} määrillä. Lisää uusi vuosi, kun Verohallinto on julkaissut määrät.</div>
+                )}
+                {years.map(y => (
+                  <div key={y} className="kx-wl-yearrow kx-wl-wide">
+                    <div className="kx-wl-yearlabel">{y}</div>
+                    {RATE_KEYS.map(k => (
+                      <label key={k} className="kx-wl-field">
+                        <span>{{ ownKmRate: 'Km-korvaus €/km', pdPart: 'Osapäiväraha €', pdFull: 'Kokopäiväraha €' }[k]}</span>
+                        <input className="kx-input" inputMode="decimal" defaultValue={str(table[y]?.[k])} onBlur={e => updateYearRate(y, k, e.target.value)} />
+                      </label>
+                    ))}
+                  </div>
+                ))}
+                <div className="kx-wl-wide">
+                  <button className="kx-btn-ghost kx-btn-sm" onClick={addRateYear}>＋ Lisää vuosi {Number(years[0]) + 1}</button>
+                </div>
+              </>
+            })()}
             <div id="kx-wl-travelinfo" className="kx-wl-section-title" style={{ gridColumn: '1 / -1', marginTop: 8 }}>Matkalaskun tiedot (UKKO-pohja)</div>
             {[
               ['invoiceTitle', 'Laskun otsikon alku (UKKO)', 'esim. Kiireapu'],
@@ -1051,7 +1137,7 @@ export default function WorkLog({ showToast }) {
                 <input className="kx-input" placeholder={ph} defaultValue={settings[k]} onBlur={e => updateTextSetting(k, e.target.value)} />
               </label>
             ))}
-            <div className="kx-hint" style={{ gridColumn: '1 / -1' }}>Oletukset koskevat uusia merkintöjä. Vanhat merkinnät pitävät omat hintansa. Verovapaat korvaukset 2026: 0,55 €/km, osapäiväraha 25 €, kokopäiväraha 54 €.</div>
+            <div className="kx-hint" style={{ gridColumn: '1 / -1' }}>Oletushinnat koskevat uusia merkintöjä, vanhat merkinnät pitävät omat hintansa. Korvaukset lasketaan aina päivän oman vuoden määrillä, joten vanhat matkalaskut eivät muutu. Asetukset tallentuvat tiliisi ja ovat samat puhelimella ja koneella.</div>
           </div>
         )}
       </div>
@@ -1337,8 +1423,8 @@ export default function WorkLog({ showToast }) {
                 <span>Päiväraha (oma matkalasku)</span>
                 <select className="kx-input" value={draft.per_diem} onChange={e => setD('per_diem', e.target.value)}>
                   <option value="ei">Ei päivärahaa</option>
-                  <option value="osa">Osapäiväraha, yli 6 h ({fmtEur(settings.pdPart)})</option>
-                  <option value="koko">Kokopäiväraha, yli 10 h ({fmtEur(settings.pdFull)})</option>
+                  <option value="osa">Osapäiväraha, yli 6 h ({fmtEur(yearRates(settings, draft.work_date).pdPart)})</option>
+                  <option value="koko">Kokopäiväraha, yli 10 h ({fmtEur(yearRates(settings, draft.work_date).pdFull)})</option>
                 </select>
               </label>
               {draft.per_diem !== 'ei' && (
@@ -1480,6 +1566,14 @@ export default function WorkLog({ showToast }) {
 }
 
 export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
+.kx-wl-vathead td { font-size: 11.5px; font-weight: 700; color: #0a3d7a; background: #eef5ff; padding-top: 7px; padding-bottom: 7px; }
+.kx-wl-vatsum td { font-size: 12.5px; color: #475569; font-weight: 600; border-bottom: 1px solid #e3e8ef; }
+.kx-wl-yearrow { display: grid; grid-template-columns: 56px repeat(3, minmax(0, 1fr)); gap: 8px 10px; align-items: end; }
+.kx-wl-yearlabel { font-family: 'Jakarta', 'Inter', sans-serif; font-size: 16px; font-weight: 800; color: #0a1428; padding-bottom: 10px; }
+@media (max-width: 640px) {
+  .kx-wl-yearrow { grid-template-columns: 1fr 1fr 1fr; }
+  .kx-wl-yearlabel { grid-column: 1 / -1; padding-bottom: 0; }
+}
 .kx-wl-pending { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .kx-wl-pending .kx-btn-ghost { background: #fff; }
 .kx-wl-billview { margin-top: -4px; }
