@@ -225,6 +225,7 @@ export default function WorkLog({ showToast }) {
       hourly_rate: str(rate),
       km: site.km != null ? str(site.km) : d.km,
       km_rate: str(client?.km_rate ?? settings.kmRate),
+      multiplier: str(client?.multiplier ?? settings.multiplier),
       per_diem_billable: !!client?.bill_per_diem,
     }
     return withPerDiem(next)
@@ -713,7 +714,12 @@ export default function WorkLog({ showToast }) {
               </div>
               {unbilled.length > 0 && (
                 <div className="kx-wl-actions">
-                  <button className="kx-btn-primary kx-btn-sm" onClick={async () => showToast(await copyText(ukkoText(unbilled, settings)) ? '✓ UKKO-rivit kopioitu' : '⚠ Kopiointi ei onnistunut')}>📋 UKKO-rivit</button>
+                  <button className="kx-btn-primary kx-btn-sm" onClick={async () => {
+                    // Kopioinnin jälkeen kysytään heti laskutetuksi merkintää (Peruuta jättää laskuttamattomaksi)
+                    const ok = await copyText(ukkoText(unbilled, settings))
+                    if (!ok) { showToast('⚠ Kopiointi ei onnistunut'); return }
+                    setInvoiceModal({ list: unbilled, client, cl, number: '', date: todayISO(), copied: true })
+                  }}>📋 UKKO-rivit</button>
                   <button className="kx-btn-ghost kx-btn-sm" onClick={async () => showToast(await copyText(groupMessageText(unbilled)) ? '✓ Viesti kopioitu' : '⚠ Kopiointi ei onnistunut')}>💬 Viesti ryhmään</button>
                   <button className="kx-btn-ghost kx-btn-sm" onClick={() => setInvoiceModal({ list: unbilled, client, cl, number: '', date: todayISO() })}>✓ Merkitse laskutetuksi</button>
                 </div>
@@ -1329,9 +1335,10 @@ export default function WorkLog({ showToast }) {
         <div className="kx-wl-overlay" onClick={() => setInvoiceModal(null)}>
           <div className="kx-wl-modal" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()} role="dialog" aria-label="Merkitse laskutetuksi">
             <div className="kx-wl-modal-head">
-              <div className="kx-modal-title">✓ Merkitse laskutetuksi</div>
+              <div className="kx-modal-title">{invoiceModal.copied ? 'Merkitäänkö laskutetuksi?' : '✓ Merkitse laskutetuksi'}</div>
               <button className="kx-icon-btn" onClick={() => setInvoiceModal(null)} aria-label="Sulje">✕</button>
             </div>
+            {invoiceModal.copied && <div className="kx-wl-calc">✓ UKKO-rivit kopioitu. Liitä ne UKKO:n laskulle, ja kun lasku on lähetetty, merkitse päivät laskutetuiksi.</div>}
             <div className="kx-wl-clientinfo">
               <div><b>{invoiceModal.client}</b></div>
               <div className="kx-wl-period">{invoiceModal.list.length} päivää · {fmtEur(round2(invoiceModal.list.reduce((a, e) => a + entryTotals(e, settings).total, 0)))} alv 0</div>
@@ -1344,7 +1351,7 @@ export default function WorkLog({ showToast }) {
                 <input className="kx-input" type="date" value={invoiceModal.date} onChange={e => setInvoiceModal(x => ({ ...x, date: e.target.value }))} /></label>
             </div>
             <div className="kx-modal-actions">
-              <button className="kx-btn-ghost" onClick={() => setInvoiceModal(null)}>Peruuta</button>
+              <button className="kx-btn-ghost" onClick={() => setInvoiceModal(null)}>{invoiceModal.copied ? 'Myöhemmin' : 'Peruuta'}</button>
               <button className="kx-btn-primary" disabled={!invoiceModal.date} onClick={async () => { if (await markInvoiced(invoiceModal)) setInvoiceModal(null) }}>✓ Merkitse laskutetuksi</button>
             </div>
           </div>
