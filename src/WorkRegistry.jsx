@@ -15,7 +15,7 @@ export function ClientModal({ client, onClose, onSaved, showToast, settings }) {
   const [d, setD] = useState(() => ({
     name: client?.name || '', business_id: client?.business_id || '', address: client?.address || '',
     einvoice: client?.einvoice || '', email: client?.email || '', contact: client?.contact || '',
-    hourly_rate: str(client?.hourly_rate), km_rate: str(client?.km_rate),
+    hourly_rate: str(client?.hourly_rate), km_rate: str(client?.km_rate), multiplier: str(client?.multiplier),
     vat_mode: client?.vat_mode || 'kaannetty', notes: client?.notes || '',
     bill_per_diem: !!client?.bill_per_diem,
   }))
@@ -27,7 +27,7 @@ export function ClientModal({ client, onClose, onSaved, showToast, settings }) {
     const row = {
       name: d.name.trim(), business_id: d.business_id.trim() || null, address: d.address.trim() || null,
       einvoice: d.einvoice.trim() || null, email: d.email.trim() || null, contact: d.contact.trim() || null,
-      hourly_rate: numOrNull(d.hourly_rate), km_rate: numOrNull(d.km_rate), vat_mode: d.vat_mode,
+      hourly_rate: numOrNull(d.hourly_rate), km_rate: numOrNull(d.km_rate), multiplier: numOrNull(d.multiplier), vat_mode: d.vat_mode,
       notes: d.notes.trim() || null, bill_per_diem: d.bill_per_diem,
     }
     setSaving(true)
@@ -72,6 +72,8 @@ export function ClientModal({ client, onClose, onSaved, showToast, settings }) {
             <input className="kx-input" inputMode="decimal" placeholder={str(settings.hourlyRate)} value={d.hourly_rate} onChange={e => set('hourly_rate', e.target.value)} /></label>
           <label className="kx-wl-field"><span>Km-hinta €</span>
             <input className="kx-input" inputMode="decimal" placeholder={str(settings.kmRate)} value={d.km_rate} onChange={e => set('km_rate', e.target.value)} /></label>
+          <label className="kx-wl-field"><span>Urakan kerroin (TES-hinta ×)</span>
+            <input className="kx-input" inputMode="decimal" placeholder={str(settings.multiplier)} value={d.multiplier} onChange={e => set('multiplier', e.target.value)} /></label>
           <label className="kx-wl-field kx-wl-wide"><span>ALV-käsittely</span>
             <select className="kx-input" value={d.vat_mode} onChange={e => set('vat_mode', e.target.value)}>
               {Object.entries(VAT_MODE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -203,6 +205,7 @@ export default function WorkRegistry({ clients, sites, onEditClient, onEditSite 
                 <div className="kx-wl-period" style={{ marginTop: 4 }}>
                   {c.hourly_rate != null ? `${fmtEur(c.hourly_rate)}/h` : 'Oletustuntihinta'}
                   {c.km_rate != null && ` · ${fmtEur(c.km_rate)}/km`}
+                  {c.multiplier != null && ` · urakka TES × ${str(c.multiplier)}`}
                   {` · ${c.vat_mode === 'alv' ? 'ALV 25,5 %' : 'käännetty ALV'}`}
                   {c.bill_per_diem && ' · päivärahat laskutetaan'}
                   {c.contact && ` · ${c.contact}`}

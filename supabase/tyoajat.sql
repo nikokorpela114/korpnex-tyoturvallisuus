@@ -217,3 +217,6 @@ drop policy if exists "tt wl_invoices own" on public.wl_invoices;
 create policy "tt wl_invoices own" on public.wl_invoices for all
   using ((select tt_is_consultant()) and user_id = (select auth.uid()))
   with check ((select tt_is_consultant()) and user_id = (select auth.uid()));
+
+-- Asiakaskohtainen urakan kerroin (TES-hinta × kerroin). Tyhjä = Asetusten oletus.
+alter table public.wl_clients add column if not exists multiplier numeric;
