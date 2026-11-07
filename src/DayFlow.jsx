@@ -408,7 +408,7 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
   }
   const clean = lines.filter(l => num(l.maara) && num(l.tes)).map(l => (l.hourly
     ? { tyolaji: (l.tyolaji || '').trim() || 'Tuntityö', maara: num(l.maara), yksikko: 'h', tes: num(l.tes), hourly: true }
-    : { tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'jm', tes: num(l.tes) }))
+    : { tyolaji: (l.tyolaji || '').trim() || 'Urakkatyö', maara: num(l.maara), yksikko: l.yksikko || 'jm', tes: num(l.tes), ...((l.kohta || '').trim() ? { kohta: l.kohta.trim() } : {}) }))
   const total = round2(clean.reduce((s, l) => s + num(l.maara) * unitPrice(l, multiplier), 0))
   const missingPrice = lines.some(l => num(l.maara) && !num(l.tes))
 
@@ -452,6 +452,7 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
                 <option value="__custom">✏️ Muu työlaji (kirjoita)</option>
               </select>
               {custom && <input className="kx-input" placeholder="Työlaji" value={l.tyolaji} onChange={e => setL(i, 'tyolaji', e.target.value)} />}
+              <input className="kx-input kx-day-kohta" list="kx-day-kohdat" placeholder="Kohta / osasto, esim. Osasto V4 (vapaaehtoinen)" aria-label="Kohta" value={l.kohta || ''} onChange={e => setL(i, 'kohta', e.target.value)} />
               <div className="kx-day-amount-row">
                 <input className="kx-input kx-day-qty" inputMode="decimal" placeholder="Määrä" aria-label="Määrä" value={l.maara} onChange={e => setL(i, 'maara', e.target.value)} />
                 <select className="kx-input" aria-label="Yksikkö" value={l.yksikko} onChange={e => setL(i, 'yksikko', e.target.value)}>
@@ -464,7 +465,8 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
             </div>
           )
         })}
-        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, emptyU()])}>＋ Urakkarivi</button>
+        <datalist id="kx-day-kohdat">{[...new Set(lines.map(l => (l.kohta || '').trim()).filter(Boolean))].map(t => <option key={t} value={t} />)}</datalist>
+        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, { ...emptyU(), kohta: [...ls].reverse().find(l => !l.hourly)?.kohta || '' }])}>＋ Urakkarivi</button>
       </div>
 
       {(entry.kind === 'urakka' || lines.some(l => !l.hourly && l.tyolaji)) && <>
@@ -665,6 +667,7 @@ export const DAYFLOW_CSS = `
 .kx-day-amount-row > .kx-input { flex: 1; min-width: 0; }
 .kx-day-amount-row > .kx-day-qty { flex: 1.3; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kx-wl-modal .kx-day-amounts .kx-input { font-size: 16px; }
+.kx-wl-modal .kx-day-amounts .kx-day-kohta { font-size: 14px; color: #475569; padding-top: 6px; padding-bottom: 6px; }
 .kx-day-links .kx-wl-linkbtn { color: #475569; margin-top: 0; }
 @media (max-width: 640px) {
   .kx-day-actions > button { flex: 1 1 100%; }
