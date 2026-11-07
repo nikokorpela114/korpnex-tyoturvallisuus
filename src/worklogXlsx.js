@@ -9,7 +9,7 @@
 // päivittyvät, jos riviä muokataan Excelissä.
 import {
   KIND_LABELS, PER_DIEM_LABELS, num, round2, unitPrice, entryTotals,
-  buildInvoice, buildTravelClaim, buildMaterialUsage, monthLabel, fmtTime, clientInfoLines, buildDriveLog,
+  buildInvoice, buildTravelClaim, buildMaterialUsage, monthLabel, fmtTime, clientInfoLines, buildDriveLog, yearRates,
 } from './worklog.js'
 
 const NAVY = 'FF0A1428'
@@ -275,9 +275,11 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
     const ws = wb.addWorksheet('Matkalasku')
     const cols = [['Päivä', 11], ['Kohde', 30], ['Asiakas', 18], ['Km', 8], ['Km-korvaus', 12], ['Päiväraha', 16], ['Päiväraha €', 12], ['Yhteensä', 12]]
     cols.forEach(([, w], i) => { ws.getColumn(i + 1).width = w })
-    title(ws, `Matkalasku · ${mLabel}`, `Korpnex Oy maksaa verovapaasti · km-korvaus ${String(settings.ownKmRate).replace('.', ',')} €/km`, cols.length)
+    // Km-korvaus jakson vuoden mukaan (rivikohtainen kaava käyttää oman vuotensa määrää)
+    const kmRate = num(yearRates(settings, claim.rows[0]?.date || sorted[0]?.work_date).ownKmRate)
+    title(ws, `Matkalasku · ${mLabel}`, `Korpnex Oy maksaa verovapaasti · km-korvaus ${String(kmRate).replace('.', ',')} €/km`, cols.length)
     ws.getCell('J4').value = '€/km'
-    ws.getCell('K4').value = num(settings.ownKmRate)
+    ws.getCell('K4').value = kmRate
     ws.getCell('K4').numFmt = EUR
     ws.getCell('J4').font = { name: FONT, size: 9, color: { argb: 'FF64748B' } }
     header(ws, 5, cols.map(c => c[0]))
@@ -291,7 +293,7 @@ export function buildWorkbook(ExcelJS, entries, settings, month, clients = [], s
       row.getCell(3).value = x.client
       row.getCell(4).value = x.km || null
       row.getCell(4).numFmt = NUM
-      row.getCell(5).value = x.km ? { formula: `ROUND(D${r}*$K$4,2)`, result: x.kmEur } : null
+      row.getCell(5).value = x.km ? { formula: x.kmRate === kmRate ? `ROUND(D${r}*$K$4,2)` : `ROUND(D${r}*${x.kmRate},2)`, result: x.kmEur } : null
       row.getCell(5).numFmt = EUR
       row.getCell(6).value = x.pdEur ? PER_DIEM_LABELS[x.perDiem] : ''
       row.getCell(7).value = x.pdEur || null

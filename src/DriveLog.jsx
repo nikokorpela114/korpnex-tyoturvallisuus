@@ -8,7 +8,7 @@
 // lukemien väli näytetään yksityisajona, joka ei kuulu korvauksiin.
 import React, { useState } from 'react'
 import { sb } from './supabaseClient.js'
-import { num, fmtNum, fmtDate, fmtTime, fmtEur, round2, buildDriveLog } from './worklog.js'
+import { num, fmtNum, fmtDate, fmtTime, fmtEur, round2, buildDriveLog, yearRates } from './worklog.js'
 
 const pad = n => String(n).padStart(2, '0')
 const nowDate = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
@@ -251,7 +251,8 @@ export function OpenTripBanner({ trip, onEnd }) {
 // --- Ajot-välilehti -----------------------------------------------------------
 export default function DriveLog({ entries, trips, sites, settings, onEditTrip, onNewTrip, onStartTrip, openTrip, onExcel, exporting }) {
   const log = buildDriveLog(entries, trips, sites, settings.homeAddress)
-  const eur = round2(log.businessKm * num(settings.ownKmRate))
+  // Km-korvaus kunkin ajon vuoden määrällä
+  const eur = round2(log.rows.filter(r => !r.open).reduce((s, r) => s + r.km * num(yearRates(settings, r.date).ownKmRate), 0))
   return (
     <>
       <div className="kx-wl-stats">
