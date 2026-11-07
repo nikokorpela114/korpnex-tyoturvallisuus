@@ -10,6 +10,9 @@
 // "Päivä käynnissä" (DayFlow.jsx): työpäivä napeilla lähdöstä kotiinpaluuseen,
 // ajo ja työaika samassa kulussa, työmaan vaihto kesken päivän.
 // Laskutustila: laskuttamatta / laskutettu (lasku wl_invoices) / ei laskuteta.
+// Laskutus-välilehti: "Laskuttamatta nyt" (kaikki laskuttamattomat jaksosta
+// riippumatta, viikkolaskutukseen) tai "Jakso" (raportit, matkalasku, materiaalit).
+// Päivä käynnissä -napit toimivat ilman verkkoa (dayOutbox.js).
 // Laskenta on src/worklog.js:ssä. Tietokanta: supabase/tyoajat.sql (RLS:
 // vain kirjautunut konsultti näkee omat rivinsä, asiakasportaalissa ei koskaan).
 // Näytetään omana osionaan WorkApp.jsx:ssä (/?tyoajat). Välilehdet: Kirjaukset,
@@ -35,6 +38,7 @@ import { downloadUkkoTravelClaim } from './ukkoMatkalasku.js'
 import DriveLog, { TripModal, OpenTripBanner } from './DriveLog.jsx'
 import { DayStartModal, DayPanel, DAYFLOW_CSS } from './DayFlow.jsx'
 import WorkSummary, { SUMMARY_CSS } from './WorkSummary.jsx'
+import { flushOutbox, pendingCount, applyPending, saveLiveCache, loadLiveCache, isRetryable, realId } from './dayOutbox.js'
 
 const TYOLAJIT = ['Silikonin veto', 'Elastinen saumaus', 'Akryylisaumaus', 'Pohjanauha', 'Vanhan sauman poisto', 'Ikkunan tiivistys']
 
@@ -74,7 +78,14 @@ export default function WorkLog({ showToast }) {
   // Päivä käynnissä: keskeneräiset kirjaukset (status 'kaynnissa') ja niiden ajot
   const [live, setLive] = useState({ entries: [], trips: [] })
   const [dayStart, setDayStart] = useState(false)
-  const [olderUnbilled, setOlderUnbilled] = useState([]) // aiempien jaksojen laskuttamattomat
+  const [unbilledAll, setUnbilledAll] = useState([]) // kaikki laskuttamattomat (jaksosta riippumatta)
+  const olderUnbilled = useMemo(() => unbilledAll.filter(e => e.work_date < range.from), [unbilledAll, range.from])
+  // Laskutus-välilehden näkymä: 'nyt' = kaikki laskuttamattomat, 'jakso' = valittu jakso
+  const [billView, setBillViewState] = useState(() => {
+    try { return localStorage.getItem('korpnex_tt_billview') === 'jakso' ? 'jakso' : 'nyt' } catch { return 'nyt' }
+  })
+  const setBillView = v => { setBillViewState(v); try { localStorage.setItem('korpnex_tt_billview', v) } catch { /* ok */ } }
+  const [pending, setPending] = useState(pendingCount) // puhelimessa odottavat päivän kirjaukset
   const [invoices, setInvoices] = useState([])
   const [invoiceModal, setInvoiceModal] = useState(null) // { client, list, cl }
   const [filter, setFilter] = useState('kaikki') // kaikki | laskuttamatta | laskutettu | ei
@@ -110,6 +121,9 @@ export default function WorkLog({ showToast }) {
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
+    // Ensin puhelimeen jonoon jääneet päivän kirjaukset kantaan (jos yhteys on)
+    await flushOutbox().catch(() => null)
+    setPending(pendingCount())
     const { from, to } = range
     const [m, r, c, st, tr, ot, lo, lv, ou] = await Promise.all([
       sb.from('work_entries').select('*').eq('archived', false).gte('work_date', from).lte('work_date', to)
@@ -123,18 +137,34 @@ export default function WorkLog({ showToast }) {
         .is('entry_id', null).order('trip_date', { ascending: false }).limit(1),
       sb.from('wl_trips').select('odo_start, odo_end, km').eq('archived', false).not('odo_start', 'is', null).order('odo_start', { ascending: false }).limit(10),
       sb.from('work_entries').select('*').eq('archived', false).eq('status', 'kaynnissa').order('id'),
-      sb.from('work_entries').select('*').eq('archived', false).is('invoiced_at', null).lt('work_date', from)
-        .order('work_date', { ascending: false }).limit(500),
+      sb.from('work_entries').select('*').eq('archived', false).is('invoiced_at', null)
+        .order('work_date').order('id').limit(1000),
     ])
-    // Käynnissä oleva päivä ja sen ajot (sarakkeita ei ole ennen tyoajat.sql:n päivitystä → ei päivää)
-    const liveEntries = lv.error ? [] : (lv.data || [])
-    let liveTrips = []
-    if (liveEntries.length) {
-      const lt = await sb.from('wl_trips').select('*').eq('archived', false).in('entry_id', liveEntries.map(e => e.id))
-      liveTrips = lt.error ? [] : (lt.data || [])
+    // Käynnissä oleva päivä ja sen ajot (sarakkeita ei ole ennen tyoajat.sql:n päivitystä → ei päivää).
+    // Ilman yhteyttä näytetään viimeksi haettu päivä + puhelimessa odottavat muutokset.
+    const offline = isRetryable(m.error) || isRetryable(lv.error)
+    let serverLive = null
+    if (!lv.error) {
+      const liveEntries = lv.data || []
+      let liveTrips = [], tripsOk = true
+      if (liveEntries.length) {
+        const lt = await sb.from('wl_trips').select('*').eq('archived', false).in('entry_id', liveEntries.map(e => e.id))
+        tripsOk = !lt.error
+        liveTrips = lt.error ? [] : (lt.data || [])
+      }
+      if (tripsOk) { serverLive = { entries: liveEntries, trips: liveTrips }; saveLiveCache(serverLive) }
     }
-    setLive({ entries: liveEntries, trips: liveTrips })
-    setOlderUnbilled(ou.error ? [] : (ou.data || []).filter(e => e.status !== 'kaynnissa' && isBillable(e)))
+    const liveNow = applyPending(serverLive || (offline ? loadLiveCache() : { entries: [], trips: [] }))
+    const liveEntries = liveNow.entries
+    setLive(liveNow)
+    setPending(pendingCount())
+    if (!ou.error) setUnbilledAll((ou.data || []).filter(e => e.status !== 'kaynnissa' && isBillable(e)))
+    if (offline && m.error) {
+      // Ei yhteyttä: pidetään viimeksi haetut tiedot näkyvissä
+      setErr('📶 Ei yhteyttä. Näytetään viimeksi haetut tiedot.')
+      setLoading(false)
+      return
+    }
     const doneEntries = (m.data || []).filter(e => e.status !== 'kaynnissa')
     const invIds = [...new Set(doneEntries.map(e => e.invoice_id).filter(Boolean))]
     if (invIds.length) {
@@ -189,6 +219,14 @@ export default function WorkLog({ showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range.from, range.to])
   useEffect(() => { load() }, [load])
+  // Odottavat kirjaukset lähtevät, kun verkko palaa, sovellus avataan tai 30 s välein
+  useEffect(() => {
+    const retry = () => { if (pendingCount() && document.visibilityState !== 'hidden') load() }
+    window.addEventListener('online', retry)
+    document.addEventListener('visibilitychange', retry)
+    const t = setInterval(retry, 30000)
+    return () => { window.removeEventListener('online', retry); document.removeEventListener('visibilitychange', retry); clearInterval(t) }
+  }, [load])
 
 
   const clientNames = useMemo(() => [...new Set(recent.map(r => r.client_name).filter(Boolean))], [recent])
@@ -416,11 +454,24 @@ export default function WorkLog({ showToast }) {
     return draftToRow({ ...d, notes: '' })
   }
   const liveIds = live.entries.map(e => e.id)
+  // Käynnissä olevan päivän kirjaus tuoreena kannasta. Lomake tallentaa suoraan
+  // kantaan, joten puhelimessa odottavien kirjausten pitää ensin mennä perille.
+  async function syncedEntry(e) {
+    const had = pendingCount()
+    if (had) await flushOutbox().catch(() => null)
+    setPending(pendingCount())
+    if (had && !pendingCount()) load() // väliaikaiset id:t → oikeat
+    if (pendingCount()) { showToast('📶 Päivän kirjaukset odottavat vielä yhteyttä. Yritä, kun verkko toimii.'); return null }
+    const { data, error } = await sb.from('work_entries').select('*').eq('id', realId(e.id))
+    if (error || !data?.[0]) { showToast('📶 Ei yhteyttä, yritä hetken päästä uudelleen'); return null }
+    return data[0]
+  }
   async function reviewDay(first) {
     // Tuoreet tiedot kannasta (km-jako ja ajat päivittyivät juuri)
-    const { data } = await sb.from('work_entries').select('*').eq('id', first.id)
-    const n = live.entries.length, i = live.entries.findIndex(e => e.id === first.id)
-    editDraft(data?.[0] || first, { finalize: true, step: n > 1 && i >= 0 ? `${i + 1}/${n}` : '' })
+    const fresh = await syncedEntry(first)
+    if (!fresh) return
+    const n = live.entries.length, i = live.entries.findIndex(e => realId(e.id) === fresh.id)
+    editDraft(fresh, { finalize: true, step: n > 1 && i >= 0 ? `${i + 1}/${n}` : '' })
   }
 
   async function save() {
@@ -450,7 +501,7 @@ export default function WorkLog({ showToast }) {
       await sb.from('wl_trips').update({ km: num(saved.km) }).eq('entry_id', saved.id).eq('archived', false)
     }
     if (draft._finalize) {
-      const next = live.entries.find(e => e.id !== draft.id && e.status === 'kaynnissa')
+      const next = live.entries.find(e => realId(e.id) !== draft.id && e.status === 'kaynnissa')
       if (next) {
         showToast('✓ Tallennettu, tarkista vielä seuraava työmaa')
         await reviewDay(next)
@@ -550,7 +601,8 @@ export default function WorkLog({ showToast }) {
   // --- Kuukauden yhteenvedot -------------------------------------------------
   const byClient = useMemo(() => {
     const m = new Map()
-    for (const e of entries.filter(isBillable)) {
+    const src = billView === 'nyt' ? unbilledAll : entries
+    for (const e of src.filter(isBillable)) {
       const k = e.client_name
       if (!m.has(k)) m.set(k, [])
       m.get(k).push(e)
@@ -558,7 +610,7 @@ export default function WorkLog({ showToast }) {
     // Laskuttamattomat asiakkaat ensin, kokonaan laskutetut perään
     const open = list => list.some(e => !e.invoiced_at && isBillable(e)) ? 0 : 1
     return [...m.entries()].sort((a, b) => open(a[1]) - open(b[1]) || a[0].localeCompare(b[0], 'fi'))
-  }, [entries])
+  }, [entries, unbilledAll, billView])
   const claim = useMemo(() => buildTravelClaim(entries, settings, trips), [entries, settings, trips])
   const usage = useMemo(() => buildMaterialUsage(entries), [entries])
   const monthTotal = round2(entries.filter(isBillable).reduce((s, e) => s + entryTotals(e, settings).total, 0))
@@ -600,10 +652,16 @@ export default function WorkLog({ showToast }) {
 
       <DayPanel
         live={live} sites={sites} clients={clients} settings={settings} makeEntryRow={makeEntryRow} showToast={showToast}
-        onChanged={async (o = {}) => { await load(); if (o.review && live.entries[0]) reviewDay(live.entries[0]) }}
+        onChanged={async (o = {}) => { await load(); if (o.review && live.entries[0] && !pendingCount()) reviewDay(live.entries[0]) }}
         onReview={reviewDay}
-        onEdit={e => editDraft(e)}
+        onEdit={async e => { const f = await syncedEntry(e); if (f) editDraft(f) }}
       />
+      {pending > 0 && (
+        <div className="kx-wl-warn kx-wl-pending">
+          <span>📶 <b>{pending} {pending === 1 ? 'kirjaus odottaa' : 'kirjausta odottaa'} yhteyttä.</b> Ne ovat tallessa puhelimessa ja lähtevät itsestään, kun verkko palaa.</span>
+          <button className="kx-btn-ghost kx-btn-sm" disabled={loading} onClick={load}>{loading ? 'Lähetetään…' : 'Yritä nyt'}</button>
+        </div>
+      )}
       <OpenTripBanner trip={openTrip} onEnd={() => setTripModal({ mode: 'end', trip: openTrip })} />
 
       <div className="kx-wl-tabbar" role="tablist" aria-label="Työajat-näkymä">
@@ -617,6 +675,7 @@ export default function WorkLog({ showToast }) {
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => changeTab(k)}>
             <span aria-hidden="true" className="kx-wl-tabicon">{icon}</span>
             <span className="kx-wl-tablong">{label}</span><span className="kx-wl-tabshort">{short}</span>
+            {k === 'laskutus' && unbilledAll.length > 0 && <span className="kx-wl-tabbadge" aria-label={`${unbilledAll.length} laskuttamatonta päivää`}>{unbilledAll.length}</span>}
           </button>
         ))}
       </div>
@@ -625,8 +684,16 @@ export default function WorkLog({ showToast }) {
         <WorkRegistry clients={clients} sites={sites} onEditClient={c => setClientEdit(c)} onEditSite={x => setSiteEdit(x)} />
       )}
 
+      {tab === 'laskutus' && (
+        <div className="kx-wl-seg kx-wl-billview" role="radiogroup" aria-label="Laskutusnäkymä">
+          <button role="radio" aria-checked={billView === 'nyt'} className={billView === 'nyt' ? 'active' : ''} onClick={() => setBillView('nyt')}>
+            🧾 Laskuttamatta nyt{unbilledAll.length ? ` (${fmtEur(round2(unbilledAll.reduce((a, e) => a + entryTotals(e, settings).total, 0)))})` : ''}
+          </button>
+          <button role="radio" aria-checked={billView === 'jakso'} className={billView === 'jakso' ? 'active' : ''} onClick={() => setBillView('jakso')}>📅 Jakso, matkalasku ja raportit</button>
+        </div>
+      )}
       {(tab === 'kirjaukset' || tab === 'laskutus' || tab === 'ajot') && <>
-      <div className="kx-wl-monthbar">
+      <div className="kx-wl-monthbar" style={tab === 'laskutus' && billView === 'nyt' ? { display: 'none' } : undefined}>
         <div className="kx-wl-seg kx-wl-periodseg" role="radiogroup" aria-label="Jakso">
           {Object.entries(PERIOD_LABELS).map(([k, l]) => (
             <button key={k} role="radio" aria-checked={mode === k} className={mode === k ? 'active' : ''} onClick={() => setMode(k)}>{l}</button>
@@ -647,7 +714,7 @@ export default function WorkLog({ showToast }) {
       {err && <div className="kx-error">{err}</div>}
       {loading && !entries.length && <div className="kx-empty-note">Ladataan…</div>}
 
-      {!loading && !err && entries.length === 0 && tab !== 'ajot' && (
+      {!loading && !err && entries.length === 0 && tab !== 'ajot' && !(tab === 'laskutus' && billView === 'nyt') && (
         <div className="kx-empty-note">
           Ei {tab === 'laskutus' ? 'laskutettavaa' : 'merkintöjä'} jaksolla {pLabel.toLowerCase()}.<br />
           {!live.entries.length && <button className="kx-btn-primary" style={{ marginTop: 12 }} onClick={() => setDayStart(true)}>▶ Aloita työpäivä</button>}
@@ -669,7 +736,14 @@ export default function WorkLog({ showToast }) {
         />
       )}
 
-      {tab === 'laskutus' && entries.length > 0 && (
+      {tab === 'laskutus' && billView === 'nyt' && !loading && !err && unbilledAll.length === 0 && (
+        <div className="kx-empty-note">✓ Kaikki laskutettu. Uudet päivät tulevat tähän, kun ne on tallennettu.</div>
+      )}
+      {tab === 'laskutus' && billView === 'nyt' && unbilledAll.length > 0 && (
+        <div className="kx-hint" style={{ marginTop: -6 }}>Kaikki laskuttamattomat päivät asiakkaittain. Kopioi UKKO-rivit, tee lasku ja merkitse laskutetuksi. Matkalasku ja raportit löytyvät Jakso-näkymästä.</div>
+      )}
+
+      {tab === 'laskutus' && billView === 'jakso' && entries.length > 0 && (
         <div className="kx-card kx-wl-reports">
           <div>
             <div className="kx-card-title" style={{ margin: 0 }}>Raportit · {pLabel}</div>
@@ -682,7 +756,7 @@ export default function WorkLog({ showToast }) {
         </div>
       )}
 
-      {tab === 'laskutus' && olderByMonth.length > 0 && (
+      {tab === 'laskutus' && billView === 'jakso' && olderByMonth.length > 0 && (
         <div className="kx-wl-warn kx-wl-older">
           <div><b>Aiemmilta kuukausilta laskuttamatta {fmtEur(round2(olderByMonth.reduce((s, x) => s + x.eur, 0)))}</b></div>
           <div className="kx-wl-actions" style={{ marginTop: 6 }}>
@@ -708,7 +782,7 @@ export default function WorkLog({ showToast }) {
               <div>
                 <div className="kx-card-title" style={{ margin: 0 }}>{client}</div>
                 <div className="kx-main-sub">
-                  {unbilled.length ? `${unbilled.length} laskuttamatonta päivää` : 'Kaikki laskutettu'}
+                  {unbilled.length ? `${unbilled.length} laskuttamatonta päivää · ${fmtEur(round2(unbilled.reduce((a, e) => a + entryTotals(e, settings).total, 0)))}` : 'Kaikki laskutettu'}
                   {billedTotal > 0 && ` · laskutettu ${fmtEur(billedTotal)}`}
                 </div>
               </div>
@@ -800,7 +874,7 @@ export default function WorkLog({ showToast }) {
       })}
 
       {/* 2) Oma matkalasku */}
-      {claim.rows.length > 0 && (
+      {billView === 'jakso' && claim.rows.length > 0 && (
         <div className="kx-card">
           <div className="kx-wl-invoice-head">
             <div>
@@ -835,7 +909,7 @@ export default function WorkLog({ showToast }) {
       )}
 
       {/* 3) Materiaalit */}
-      {usage.length > 0 && (
+      {billView === 'jakso' && usage.length > 0 && (
         <div className="kx-card">
           <div className="kx-wl-invoice-head">
             <div>
@@ -1317,7 +1391,7 @@ export default function WorkLog({ showToast }) {
               {draft.id && <button className="kx-btn-ghost" style={{ marginRight: 'auto', color: '#b91c1c' }} onClick={() => archive(draft)}>🗑 Poista</button>}
               <button className="kx-btn-ghost" disabled={saving} onClick={() => setDraft(null)}>Peruuta</button>
               <button className="kx-btn-primary" disabled={saving} onClick={save}>
-                {saving ? 'Tallennetaan…' : draft._finalize ? (liveIds.filter(id => id !== draft.id).length ? 'Tallenna ja seuraava' : '✓ Tallenna päivä') : draft.id ? 'Tallenna muutokset' : 'Kirjaa työpäivä'}
+                {saving ? 'Tallennetaan…' : draft._finalize ? (liveIds.filter(id => realId(id) !== draft.id).length ? 'Tallenna ja seuraava' : '✓ Tallenna päivä') : draft.id ? 'Tallenna muutokset' : 'Kirjaa työpäivä'}
               </button>
             </div>
           </div>
@@ -1406,6 +1480,15 @@ export default function WorkLog({ showToast }) {
 }
 
 export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
+.kx-wl-pending { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.kx-wl-pending .kx-btn-ghost { background: #fff; }
+.kx-wl-billview { margin-top: -4px; }
+.kx-wl-tabbadge { display: inline-block; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: #f59e0b; color: #fff; font-size: 11px; font-weight: 800; line-height: 16px; text-align: center; }
+@media (max-width: 640px) {
+  .kx-wl-billview { flex-direction: column; }
+  .kx-wl-tabbar button { position: relative; }
+  .kx-wl-tabbadge { position: absolute; top: 1px; left: 50%; margin-left: 9px; font-size: 10px; min-width: 16px; padding: 0 5px; line-height: 15px; }
+}
 .kx-wl-periodseg { flex: 0 0 auto; min-width: 250px; }
 .kx-wl-periodseg button { padding: 7px 10px; }
 .kx-wl-periodnav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
