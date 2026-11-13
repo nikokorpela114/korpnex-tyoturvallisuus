@@ -491,11 +491,41 @@ export function datesText(dates, withYear = true) {
   const head = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}` : parts[0]
   return withYear ? `${head}.${ds[ds.length - 1].slice(0, 4)}` : head
 }
-// Tuntirivien nimet yhteen: "Siivous" ja "Siivous, tavaroiden siirtely" → jälkimmäinen
+// Tuntirivien kuvaukset yhteen ilman toistoa: kuvaukset pilkotaan osiin (pilkku, &, ja),
+// ja sama tai lähes sama osa (kirjoitusvirhe, taivutus: "tavaroiden" / "tavaroitten")
+// otetaan vain kerran. "Siivous, tavaroiden siirtely & putsaus" + "tavaroitten siirtely
+// & putsaus" → "Siivous, tavaroiden siirtely, putsaus".
+const normName = s => String(s || '').toLowerCase().replace(/[^a-z0-9åäö]/g, '')
+function editDistance(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 3
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    prev = cur
+  }
+  return prev[b.length]
+}
+const sameName = (a, b) => a === b || (a.length > 5 && b.length > 5 && (editDistance(a, b) <= 2 || a.includes(b) || b.includes(a)))
+export function nameParts(names) {
+  const out = []
+  for (const n of names) {
+    for (const raw of String(n || '').split(/\s*(?:,|&|\+|\bja\b)\s*/i)) {
+      const part = raw.trim()
+      const k = normName(part)
+      if (!k) continue
+      const hit = out.find(o => sameName(o.k, k))
+      if (hit) { if (k.length > hit.k.length && hit.k.length > 5 && k.includes(hit.k)) { hit.k = k; hit.part = part } continue }
+      out.push({ k, part })
+    }
+  }
+  return out.map(o => o.part)
+}
 function mergeNames(names) {
-  const u = [...new Set(names.map(n => (n || '').trim()).filter(Boolean))]
-  const keep = u.filter(n => !u.some(o => o !== n && o.toLowerCase().includes(n.toLowerCase())))
-  return keep.join(' & ')
+  const parts = nameParts(names)
+  if (!parts.length) return ''
+  const s = parts.join(', ')
+  return s.charAt(0).toUpperCase() + s.slice(1)
 }
 // UKKO-laskun rivit: nimikkeet yhdistetään työmaista ja päivistä riippumatta,
 // ei asiakastietoja eikä materiaaleja (ne ovat UKKO:n laskupohjassa).
@@ -587,14 +617,20 @@ export function groupMessageText(entries) {
   for (const [site, list] of bySite) {
     const out = [`${site} ${datesText(list.map(e => e.work_date), false)}`]
     const kohdat = new Map() // kohta → Map(nimike|yks → määrä)
+    // Tunnit hinnoittain: eri hinnalla tehdyt (esim. palokatkot 40 €/h) omalle rivilleen
     const hours = new Map(), mats = new Map()
+    const addHours = (name, qty, price) => {
+      const k = String(round2(num(price)))
+      const cur = hours.get(k) || { names: [], qty: 0 }
+      cur.names.push(name); cur.qty = round2(cur.qty + qty); hours.set(k, cur)
+    }
     for (const e of list) {
+      if (e.kind !== 'urakka' && num(e.hours)) addHours(e.kind === 'konsultointi' ? 'konsultointi' : 'tuntityö', num(e.hours), e.hourly_rate)
       for (const l of e.lines || []) {
         const q = num(l.maara)
         if (!q) continue
         if (l.hourly || (l.yksikko === 'h' && e.kind !== 'urakka')) {
-          const n = (l.tyolaji || 'tunnit').trim()
-          hours.set(n.toLowerCase(), { name: n, qty: round2((hours.get(n.toLowerCase())?.qty || 0) + q) })
+          addHours((l.tyolaji || 'tunnit').trim(), q, l.tes)
           continue
         }
         const kohta = (l.kohta || '').trim()
@@ -620,9 +656,13 @@ export function groupMessageText(entries) {
       out.push('', 'Materiaalit')
       for (const m of mats.values()) out.push(`${m.name}: ${fmtNum(m.qty)} ${m.unit}`)
     }
-    const hrs = [...hours.values()]
+    // Suurin tuntiryhmä "Tunnit: 9 h siivous, …", muut omina riveinään "Palokatkot: 2 h"
+    const hrs = [...hours.values()].sort((a, b) => b.qty - a.qty)
     if (hrs.length || list.some(e => num(e.km) > 0)) out.push('')
-    if (hrs.length) out.push(`Tunnit: ${fmtNum(round2(hrs.reduce((s, h) => s + h.qty, 0)))} h ${mergeNames(hrs.map(h => h.name)).toLowerCase()}`)
+    hrs.forEach((h, i) => {
+      const desc = mergeNames(h.names)
+      out.push(i === 0 ? `Tunnit: ${fmtNum(h.qty)} h ${desc.toLowerCase()}` : `${desc}: ${fmtNum(h.qty)} h`)
+    })
     const kmDays = list.filter(e => num(e.km) > 0).length
     if (kmDays) out.push(`Kilsat x${kmDays}`)
     blocks.push(out.join('\n'))
