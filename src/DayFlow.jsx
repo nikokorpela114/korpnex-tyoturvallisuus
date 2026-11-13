@@ -435,8 +435,9 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
     if (missingPrice) { showToast('⚠ Rivillä on määrä mutta ei hintaa'); return }
     const materials = mats.filter(m => (m.nimi || '').trim() && num(m.maara)).map(m => ({ nimi: m.nimi.trim(), maara: num(m.maara), yksikko: m.yksikko || 'kpl' }))
     const upd = { lines: clean, materials }
-    // Urakkarivit → kirjaus urakaksi (tunnit lasketaan silti kellonajoista tiedoksi)
-    if (clean.some(l => !l.hourly) && entry.kind !== 'urakka') { upd.kind = 'urakka'; upd.hours = 0; upd.hourly_rate = 0; upd.multiplier = multiplier }
+    // Rivejä (urakka tai nimetyt tuntirivit, esim. "Palokatkot 8 h × 40 €") → laskutus riveistä.
+    // Tunnit lasketaan silti kellonajoista tiedoksi.
+    if (clean.length && entry.kind !== 'urakka') { upd.kind = 'urakka'; upd.hours = 0; upd.hourly_rate = 0; upd.multiplier = multiplier }
     writeAmountsDraft(entry.id, { lines, mats, at: Date.now() })
     setBusy(true)
     let res
@@ -504,15 +505,17 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
         <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, { ...emptyU(), kohta: [...ls].reverse().find(l => !l.hourly)?.kohta || '' }])}>＋ Urakkarivi</button>
       </div>
 
-      {(entry.kind === 'urakka' || lines.some(l => !l.hourly && l.tyolaji)) && <>
-      <div className="kx-wl-section-title">Tunnit urakan lisäksi</div>
+      <div className="kx-wl-section-title">{entry.kind === 'urakka' || lines.some(l => !l.hourly && l.tyolaji) ? 'Tunnit urakan lisäksi' : 'Tuntityö'}</div>
+      {entry.kind !== 'urakka' && !lines.some(l => l.hourly) && (
+        <div className="kx-hint" style={{ marginTop: -4 }}>Lisää tuntirivi, jos haluat laskulle oman nimen ja hinnan (esim. Palokatkot 40 €/h). Muuten tunnit lasketaan kellonajoista asiakkaan tuntihinnalla.</div>
+      )}
       <div className="kx-day-amounts">
         {lines.map((l, i) => {
           if (!l.hourly) return null
           return (
             <div key={i} className="kx-day-amount">
               <div className="kx-day-amount-row">
-                <input className="kx-input" style={{ flex: 2 }} placeholder="esim. Siivous" value={l.tyolaji} onChange={e => setL(i, 'tyolaji', e.target.value)} />
+                <input className="kx-input" style={{ flex: 2 }} placeholder="esim. Palokatkot" value={l.tyolaji} onChange={e => setL(i, 'tyolaji', e.target.value)} />
                 <input className="kx-input kx-day-qty" inputMode="decimal" placeholder="h" aria-label="Tunnit" value={l.maara} onChange={e => setL(i, 'maara', e.target.value)} />
                 <input className="kx-input" inputMode="decimal" placeholder="€/h" aria-label="Tuntihinta" value={l.tes} onChange={e => setL(i, 'tes', e.target.value)} />
                 <button className="kx-icon-btn" aria-label="Poista tuntirivi" onClick={() => setLines(ls => ls.filter((_, j) => j !== i))}>✕</button>
@@ -520,9 +523,8 @@ function DayAmountsModal({ entry, sites, clients, settings, onClose, onSaved, sh
             </div>
           )
         })}
-        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, { tyolaji: '', maara: '', yksikko: 'h', tes: sstr(hourRate), hourly: true }])}>＋ Tunteja (esim. siivous)</button>
+        <button className="kx-btn-ghost kx-btn-sm" onClick={() => setLines(ls => [...ls, { tyolaji: '', maara: '', yksikko: 'h', tes: sstr(hourRate), hourly: true }])}>＋ Tunteja (esim. siivous, palokatkot)</button>
       </div>
-      </>}
 
       <div className="kx-wl-section-title">Materiaalit</div>
       <div className="kx-day-amounts">
