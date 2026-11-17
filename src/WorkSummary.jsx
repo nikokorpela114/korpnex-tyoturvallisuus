@@ -1,6 +1,6 @@
-// src/WorkSummary.jsx — Työajat: jakson tuntiyhteenveto (viikko / kuukausi / vuosi).
+// src/WorkSummary.jsx — Työajat: jakson tuntiyhteenveto (viikko / 2 viikkoa / kuukausi / vuosi).
 //
-// Palkit: viikko → päivät, kuukausi → viikot, vuosi → kuukaudet. Palkin
+// Palkit: viikko → päivät, 2 viikkoa ja kuukausi → viikot, vuosi → kuukaudet. Palkin
 // napautus avaa tarkemman jakson (kuukauden viikko, vuoden kuukausi).
 // Matka-aika näytetään tiedoksi (ei laskuteta).
 import React from 'react'
@@ -9,7 +9,7 @@ import { summarizePeriod, fmtNum, fmtEur } from './worklog.js'
 export default function WorkSummary({ entries, settings, mode, anchor, onDrill }) {
   const s = summarizePeriod(entries, settings, mode, anchor)
   const max = Math.max(1, ...s.rows.map(r => r.hours + r.travelH))
-  const unit = { week: 'päivittäin', month: 'viikoittain', year: 'kuukausittain' }[mode]
+  const unit = { week: 'päivittäin', twoweek: 'viikoittain', month: 'viikoittain', year: 'kuukausittain' }[mode]
   return (
     <>
       <div className="kx-wl-stats">
