@@ -246,14 +246,25 @@ export function isoWeek(dateStr) {
   const week = 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getDay() + 6) % 7)) / 7)
   return { year: d.getFullYear(), week }
 }
-export const PERIOD_LABELS = { week: 'Viikko', month: 'Kuukausi', year: 'Vuosi' }
+export const PERIOD_LABELS = { week: 'Viikko', twoweek: '2 viikkoa', month: 'Kuukausi', year: 'Vuosi' }
+// Kahden viikon jaksot alkavat aina maanantaina kiinteästä aloituspäivästä (ma 1.1.2024 = vk 1),
+// joten jaksot ovat joka vuosi samat parit: vk 45–46, 47–48, … (ei siirry vuodenvaihteessa).
+const FORTNIGHT_EPOCH = '2024-01-01'
+export function fortnightStart(dateStr) {
+  const w = weekStart(dateStr)
+  const days = Math.round((parseISO(w) - parseISO(FORTNIGHT_EPOCH)) / 86400000)
+  const off = ((days % 14) + 14) % 14
+  return addDays(w, -off)
+}
 export function periodRange(mode, anchor) {
   if (mode === 'week') { const from = weekStart(anchor); return { from, to: addDays(from, 6) } }
+  if (mode === 'twoweek') { const from = fortnightStart(anchor); return { from, to: addDays(from, 13) } }
   if (mode === 'year') { const y = String(anchor).slice(0, 4); return { from: `${y}-01-01`, to: `${y}-12-31` } }
   return monthRange(monthKey(anchor))
 }
 export function shiftPeriod(mode, anchor, delta) {
   if (mode === 'week') return addDays(weekStart(anchor), 7 * delta)
+  if (mode === 'twoweek') return addDays(fortnightStart(anchor), 14 * delta)
   if (mode === 'year') return `${Number(String(anchor).slice(0, 4)) + delta}-01-15`
   return `${shiftMonth(monthKey(anchor), delta)}-15`
 }
@@ -263,12 +274,21 @@ export function periodLabel(mode, anchor) {
     const { from, to } = periodRange('week', anchor)
     return `Viikko ${isoWeek(from).week} · ${shortDate(from)}–${shortDate(to)}${to.slice(0, 4)}`
   }
+  if (mode === 'twoweek') {
+    const { from, to } = periodRange('twoweek', anchor)
+    return `Viikot ${isoWeek(from).week}–${isoWeek(to).week} · ${shortDate(from)}–${shortDate(to)}${to.slice(0, 4)}`
+  }
   if (mode === 'year') return String(anchor).slice(0, 4)
   return monthLabel(monthKey(anchor))
 }
 // Tiedostonimiin ja Excelin otsikoihin
 export function periodKey(mode, anchor) {
   if (mode === 'week') { const w = isoWeek(weekStart(anchor)); return `${w.year}-vk${pad2(w.week)}` }
+  if (mode === 'twoweek') {
+    const { from, to } = periodRange('twoweek', anchor)
+    const a = isoWeek(from), b = isoWeek(to)
+    return `${a.year}-vk${pad2(a.week)}-${pad2(b.week)}`
+  }
   if (mode === 'year') return String(anchor).slice(0, 4)
   return monthKey(anchor)
 }
@@ -317,7 +337,7 @@ export function summarizePeriod(entries, settings, mode, anchor) {
       const d = addDays(from, i)
       buckets.push({ key: d, label: parseISO(d).toLocaleDateString('fi-FI', { weekday: 'short' }), sub: shortDate(d), match: e => e.work_date === d })
     }
-  } else if (mode === 'month') {
+  } else if (mode === 'month' || mode === 'twoweek') {
     for (let w = weekStart(from); w <= to; w = addDays(w, 7)) {
       const end = addDays(w, 6)
       buckets.push({ key: w, label: `Vk ${isoWeek(w).week}`, sub: `${shortDate(w < from ? from : w)}–${shortDate(end > to ? to : end)}`, anchor: w, match: e => e.work_date >= w && e.work_date <= end })
