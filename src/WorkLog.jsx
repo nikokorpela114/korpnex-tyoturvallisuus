@@ -6,7 +6,7 @@
 //   2) Oma matkalasku → km-korvaukset + päivärahat (Korpnex maksaa verovapaasti)
 //   3) Materiaalien kulutus työmaittain (laskutettavat ja pelkkä seuranta)
 //   4) Kaikki kuukauden merkinnät, muokkaus, toisto ja arkistointi
-// Jakso valitaan: viikko / kuukausi / vuosi (tuntiyhteenveto WorkSummary.jsx).
+// Jakso valitaan: viikko / 2 viikkoa / kuukausi / vuosi (tuntiyhteenveto WorkSummary.jsx).
 // "Päivä käynnissä" (DayFlow.jsx): työpäivä napeilla lähdöstä kotiinpaluuseen,
 // ajo ja työaika samassa kulussa, työmaan vaihto kesken päivän.
 // Laskutustila: laskuttamatta / laskutettu (lasku wl_invoices) / ei laskuteta.
@@ -1029,9 +1029,10 @@ export default function WorkLog({ showToast }) {
               const t = entryTotals(e, settings)
               const st = billingState(e)
               const tv = travelByDay.get(e.work_date)
-              // Väliotsikko: kuukausinäkymässä viikoittain, vuosinäkymässä kuukausittain
-              const groupKey = mode === 'year' ? monthKey(e.work_date) : mode === 'month' ? periodKey('week', e.work_date) : null
-              const prevKey = i > 0 ? (mode === 'year' ? monthKey(shown[i - 1].work_date) : mode === 'month' ? periodKey('week', shown[i - 1].work_date) : null) : undefined
+              // Väliotsikko: kuukausi- ja 2 viikon näkymässä viikoittain, vuosinäkymässä kuukausittain
+              const byWeek = mode === 'month' || mode === 'twoweek'
+              const groupKey = mode === 'year' ? monthKey(e.work_date) : byWeek ? periodKey('week', e.work_date) : null
+              const prevKey = i > 0 ? (mode === 'year' ? monthKey(shown[i - 1].work_date) : byWeek ? periodKey('week', shown[i - 1].work_date) : null) : undefined
               let head = null
               if (groupKey && groupKey !== prevKey) {
                 const grp = shown.filter(x => (mode === 'year' ? monthKey(x.work_date) : periodKey('week', x.work_date)) === groupKey)
@@ -1583,7 +1584,7 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
   .kx-wl-tabbar button { position: relative; }
   .kx-wl-tabbadge { position: absolute; top: 1px; left: 50%; margin-left: 9px; font-size: 10px; min-width: 16px; padding: 0 5px; line-height: 15px; }
 }
-.kx-wl-periodseg { flex: 0 0 auto; min-width: 250px; }
+.kx-wl-periodseg { flex: 0 0 auto; min-width: 330px; }
 .kx-wl-periodseg button { padding: 7px 10px; }
 .kx-wl-periodnav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .kx-wl-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
