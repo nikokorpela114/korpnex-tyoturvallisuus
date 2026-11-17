@@ -6,7 +6,8 @@
 //   2) Oma matkalasku → km-korvaukset + päivärahat (Korpnex maksaa verovapaasti)
 //   3) Materiaalien kulutus työmaittain (laskutettavat ja pelkkä seuranta)
 //   4) Kaikki kuukauden merkinnät, muokkaus, toisto ja arkistointi
-// Jakso valitaan: viikko / 2 viikkoa / kuukausi / vuosi (tuntiyhteenveto WorkSummary.jsx).
+// Jakso valitaan: viikko / 2 viikkoa / kuukausi / vuosi / oma väli (päivämäärät itse,
+// esim. matkalaskun aikaväli). Tuntiyhteenveto WorkSummary.jsx.
 // "Päivä käynnissä" (DayFlow.jsx): työpäivä napeilla lähdöstä kotiinpaluuseen,
 // ajo ja työaika samassa kulussa, työmaan vaihto kesken päivän.
 // Laskutustila: laskuttamatta / laskutettu (lasku wl_invoices) / ei laskuteta.
@@ -35,7 +36,7 @@ import {
   mergeDbSettings, rateTable, yearRates, RATE_KEYS,
   monthKey, monthLabel, fmtEur, fmtNum, fmtDate,
   calcHours, suggestPerDiem, isOpenTrip, fmtTime, fmtDuration, clientInfoLines, VAT_MODE_LABELS,
-  periodRange, shiftPeriod, periodLabel, periodKey, PERIOD_LABELS,
+  periodRange, shiftPeriod, periodLabel, periodKey, PERIOD_LABELS, customRange, customAnchor, daysBetween, addDays,
   isBillable, billingState, BILLING_LABELS, workHours, dayTravel,
 } from './worklog.js'
 import { downloadWorkbook } from './worklogXlsx.js'
@@ -71,15 +72,33 @@ async function copyText(text) {
 }
 
 export default function WorkLog({ showToast }) {
-  // Jakso: viikko | kuukausi | vuosi, anchor = mikä tahansa päivä jaksolta
+  // Jakso: viikko | 2 viikkoa | kuukausi | vuosi | oma väli, anchor = mikä tahansa päivä jaksolta
   const [mode, setModeState] = useState(() => {
     try { const m = localStorage.getItem('korpnex_tt_worklog_mode'); return PERIOD_LABELS[m] ? m : 'month' } catch { return 'month' }
   })
   const setMode = m => { setModeState(m); try { localStorage.setItem('korpnex_tt_worklog_mode', m) } catch { /* ok */ } }
-  const [anchor, setAnchor] = useState(todayISO)
-  const range = periodRange(mode, anchor)
-  const month = monthKey(anchor) // UKKO- ja Excel-viennit (kuukausi)
-  const pLabel = periodLabel(mode, anchor)
+  const [anchor, setAnchorState] = useState(todayISO)
+  // Oma väli (alku..loppu), muistetaan. Oletus: kuun alusta tähän päivään.
+  const [custom, setCustomState] = useState(() => {
+    try { const v = localStorage.getItem('korpnex_tt_custom_range'); if (v && v.includes('..')) return customRange(v) } catch { /* ok */ }
+    return customRange(todayISO())
+  })
+  const setCustom = (from, to) => {
+    const r = customRange(customAnchor(from, to))
+    setCustomState(r)
+    try { localStorage.setItem('korpnex_tt_custom_range', customAnchor(r.from, r.to)) } catch { /* ok */ }
+  }
+  // Jakson tunniste laskentaan: omalla välillä 'alku..loppu', muuten päivä
+  const pAnchor = mode === 'custom' ? customAnchor(custom.from, custom.to) : anchor
+  const setAnchor = a => {
+    // Siirtyminen tiettyyn päivään (Tänään, porautuminen, vanhat kuukaudet) vaihtaa pois omalta väliltä
+    const v = typeof a === 'function' ? a(pAnchor) : a
+    if (String(v).includes('..')) { const r = customRange(v); setCustom(r.from, r.to); return }
+    if (mode === 'custom') setMode('month')
+    setAnchorState(v)
+  }
+  const range = periodRange(mode, pAnchor)
+  const pLabel = periodLabel(mode, pAnchor)
   const [entries, setEntries] = useState([])
   // Päivä käynnissä: keskeneräiset kirjaukset (status 'kaynnissa') ja niiden ajot
   const [live, setLive] = useState({ entries: [], trips: [] })
@@ -619,7 +638,7 @@ export default function WorkLog({ showToast }) {
     }
     setExporting(true)
     try {
-      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, periodKey(mode, anchor), trips)
+      await downloadUkkoTravelClaim(entries, sites, { name: settings.travelName, homeAddress: settings.homeAddress, vehicle: settings.vehicle }, settings, periodKey(mode, pAnchor), trips)
       showToast('✓ UKKO-matkalasku ladattu')
     } catch (e) {
       console.error('ukko travel claim failed:', e)
@@ -631,7 +650,7 @@ export default function WorkLog({ showToast }) {
   async function downloadExcel() {
     setExporting(true)
     try {
-      await downloadWorkbook(entries, settings, { key: periodKey(mode, anchor), label: pLabel }, clients, sites, trips)
+      await downloadWorkbook(entries, settings, { key: periodKey(mode, pAnchor), label: pLabel }, clients, sites, trips)
       showToast('✓ Excel ladattu')
     } catch (e) {
       console.error('xlsx export failed:', e)
@@ -747,9 +766,28 @@ export default function WorkLog({ showToast }) {
         </div>
         <div className="kx-wl-periodnav">
           <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(a => shiftPeriod(mode, a, -1))} aria-label="Edellinen jakso">‹</button>
-          <div className="kx-wl-month">{pLabel}</div>
+          {mode === 'custom' ? (
+            <div className="kx-wl-customrange">
+              <input className="kx-input kx-input-sm" type="date" aria-label="Alkaen" value={custom.from} max={custom.to}
+                onChange={e => e.target.value && setCustom(e.target.value, custom.to)} />
+              <span>–</span>
+              <input className="kx-input kx-input-sm" type="date" aria-label="Päättyen" value={custom.to} min={custom.from}
+                onChange={e => e.target.value && setCustom(custom.from, e.target.value)} />
+              <span className="kx-wl-customdays">{daysBetween(custom.from, custom.to) + 1} pv</span>
+            </div>
+          ) : <div className="kx-wl-month">{pLabel}</div>}
           <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(a => shiftPeriod(mode, a, 1))} aria-label="Seuraava jakso">›</button>
-          {(todayISO() < range.from || todayISO() > range.to) && <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(todayISO())}>Tänään</button>}
+          {mode !== 'custom' && (todayISO() < range.from || todayISO() > range.to) && <button className="kx-btn-ghost kx-btn-sm" onClick={() => setAnchor(todayISO())}>Tänään</button>}
+          {mode === 'custom' && (
+            <div className="kx-wl-quickrange">
+              {[
+                ['Tämä kk', () => { const t = todayISO(); setCustom(`${t.slice(0, 7)}-01`, t) }],
+                ['Ed. kk', () => { const r = periodRange('month', shiftPeriod('month', todayISO(), -1)); setCustom(r.from, r.to) }],
+                ['14 pv', () => { const t = todayISO(); setCustom(addDays(t, -13), t) }],
+                ['30 pv', () => { const t = todayISO(); setCustom(addDays(t, -29), t) }],
+              ].map(([l, f]) => <button key={l} className="kx-wl-chip" onClick={f}>{l}</button>)}
+            </div>
+          )}
         </div>
         <div className="kx-wl-monthstats" style={tab !== 'laskutus' ? { display: 'none' } : undefined}>
           <span><b>{fmtEur(monthTotal)}</b> laskutettavaa</span>
@@ -1003,8 +1041,8 @@ export default function WorkLog({ showToast }) {
 
       {/* 4) Merkinnät */}
       {tab === 'kirjaukset' && entries.length > 0 && (
-        <WorkSummary entries={entries} settings={settings} mode={mode} anchor={anchor}
-          onDrill={a => { setMode(mode === 'year' ? 'month' : 'week'); setAnchor(a) }} />
+        <WorkSummary entries={entries} settings={settings} mode={mode} anchor={pAnchor}
+          onDrill={(a, grain) => { setMode(grain === 'month' ? 'month' : 'week'); setAnchorState(a) }} />
       )}
       {tab === 'kirjaukset' && entries.length > 0 && (
         <div className="kx-card">
@@ -1029,8 +1067,8 @@ export default function WorkLog({ showToast }) {
               const t = entryTotals(e, settings)
               const st = billingState(e)
               const tv = travelByDay.get(e.work_date)
-              // Väliotsikko: kuukausi- ja 2 viikon näkymässä viikoittain, vuosinäkymässä kuukausittain
-              const byWeek = mode === 'month' || mode === 'twoweek'
+              // Väliotsikko: kuukausi-, 2 viikon ja yli viikon omassa välissä viikoittain, vuodessa kuukausittain
+              const byWeek = mode === 'month' || mode === 'twoweek' || (mode === 'custom' && daysBetween(range.from, range.to) >= 7)
               const groupKey = mode === 'year' ? monthKey(e.work_date) : byWeek ? periodKey('week', e.work_date) : null
               const prevKey = i > 0 ? (mode === 'year' ? monthKey(shown[i - 1].work_date) : byWeek ? periodKey('week', shown[i - 1].work_date) : null) : undefined
               let head = null
@@ -1584,7 +1622,12 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
   .kx-wl-tabbar button { position: relative; }
   .kx-wl-tabbadge { position: absolute; top: 1px; left: 50%; margin-left: 9px; font-size: 10px; min-width: 16px; padding: 0 5px; line-height: 15px; }
 }
-.kx-wl-periodseg { flex: 0 0 auto; min-width: 330px; }
+.kx-wl-periodseg { flex: 0 0 auto; min-width: 420px; }
+.kx-wl-customrange { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kx-wl-customrange input[type="date"] { width: 150px; min-width: 0; }
+.kx-wl-customdays { font-size: 12.5px; font-weight: 700; color: #475569; }
+.kx-wl-quickrange { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+.kx-wl-quickrange .kx-wl-chip { padding: 4px 10px; font-size: 12.5px; }
 .kx-wl-periodseg button { padding: 7px 10px; }
 .kx-wl-periodnav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .kx-wl-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -1606,6 +1649,9 @@ export const WORKLOG_CSS = DAYFLOW_CSS + SUMMARY_CSS + `
 @media (max-width: 640px) {
   .kx-wl-periodseg { width: 100%; min-width: 0; }
   .kx-wl-periodnav { width: 100%; }
+  .kx-wl-periodseg button { padding: 7px 4px; font-size: 12.5px; }
+  .kx-wl-customrange { flex: 1; min-width: 0; }
+  .kx-wl-customrange input[type="date"] { flex: 1; width: auto; font-size: 16px; }
 }
 
 .kx-wl { display: flex; flex-direction: column; gap: 16px; max-width: 980px; }
