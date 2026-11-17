@@ -225,7 +225,7 @@ export function monthLabel(key) {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-// --- Jaksot: viikko / kuukausi / vuosi ----------------------------------------
+// --- Jaksot: viikko / 2 viikkoa / kuukausi / vuosi / oma väli ---
 const pad2 = n => String(n).padStart(2, '0')
 export const toISODate = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 const parseISO = s => new Date(String(s).slice(0, 10) + 'T12:00:00')
@@ -246,7 +246,17 @@ export function isoWeek(dateStr) {
   const week = 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getDay() + 6) % 7)) / 7)
   return { year: d.getFullYear(), week }
 }
-export const PERIOD_LABELS = { week: 'Viikko', twoweek: '2 viikkoa', month: 'Kuukausi', year: 'Vuosi' }
+export const PERIOD_LABELS = { week: 'Viikko', twoweek: '2 viikkoa', month: 'Kuukausi', year: 'Vuosi', custom: 'Oma väli' }
+// Oma väli: anchor on muotoa 'vvvv-kk-pp..vvvv-kk-pp' (pelkkä päivä = kuun alusta siihen päivään)
+export function customRange(anchor) {
+  const [a, b] = String(anchor || '').split('..')
+  let from = (a || '').slice(0, 10), to = (b || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) from = toISODate(new Date())
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) { to = from; from = `${from.slice(0, 7)}-01` }
+  return from <= to ? { from, to } : { from: to, to: from }
+}
+export const customAnchor = (from, to) => `${from}..${to}`
+export const daysBetween = (a, b) => Math.round((parseISO(b) - parseISO(a)) / 86400000)
 // Kahden viikon jaksot alkavat aina maanantaina kiinteästä aloituspäivästä (ma 1.1.2024 = vk 1),
 // joten jaksot ovat joka vuosi samat parit: vk 45–46, 47–48, … (ei siirry vuodenvaihteessa).
 const FORTNIGHT_EPOCH = '2024-01-01'
@@ -259,12 +269,19 @@ export function fortnightStart(dateStr) {
 export function periodRange(mode, anchor) {
   if (mode === 'week') { const from = weekStart(anchor); return { from, to: addDays(from, 6) } }
   if (mode === 'twoweek') { const from = fortnightStart(anchor); return { from, to: addDays(from, 13) } }
+  if (mode === 'custom') return customRange(anchor)
   if (mode === 'year') { const y = String(anchor).slice(0, 4); return { from: `${y}-01-01`, to: `${y}-12-31` } }
   return monthRange(monthKey(anchor))
 }
 export function shiftPeriod(mode, anchor, delta) {
   if (mode === 'week') return addDays(weekStart(anchor), 7 * delta)
   if (mode === 'twoweek') return addDays(fortnightStart(anchor), 14 * delta)
+  if (mode === 'custom') {
+    // Siirretään koko väliä sen pituuden verran (esim. 10 pv → seuraavat 10 pv)
+    const { from, to } = customRange(anchor)
+    const n = (daysBetween(from, to) + 1) * delta
+    return customAnchor(addDays(from, n), addDays(to, n))
+  }
   if (mode === 'year') return `${Number(String(anchor).slice(0, 4)) + delta}-01-15`
   return `${shiftMonth(monthKey(anchor), delta)}-15`
 }
@@ -278,6 +295,11 @@ export function periodLabel(mode, anchor) {
     const { from, to } = periodRange('twoweek', anchor)
     return `Viikot ${isoWeek(from).week}–${isoWeek(to).week} · ${shortDate(from)}–${shortDate(to)}${to.slice(0, 4)}`
   }
+  if (mode === 'custom') {
+    const { from, to } = customRange(anchor)
+    const n = daysBetween(from, to) + 1
+    return `${shortDate(from)}${from.slice(0, 4) !== to.slice(0, 4) ? from.slice(0, 4) : ''}–${shortDate(to)}${to.slice(0, 4)} · ${n} pv`
+  }
   if (mode === 'year') return String(anchor).slice(0, 4)
   return monthLabel(monthKey(anchor))
 }
@@ -289,6 +311,7 @@ export function periodKey(mode, anchor) {
     const a = isoWeek(from), b = isoWeek(to)
     return `${a.year}-vk${pad2(a.week)}-${pad2(b.week)}`
   }
+  if (mode === 'custom') { const { from, to } = customRange(anchor); return `${from}_${to}` }
   if (mode === 'year') return String(anchor).slice(0, 4)
   return monthKey(anchor)
 }
@@ -327,26 +350,31 @@ export function dayTravel(entries) {
   return out
 }
 
-// Jakson yhteenveto: palkit (viikko → päivät, kuukausi → viikot, vuosi → kuukaudet),
+// Jakson yhteenveto: palkit (viikko → päivät, kuukausi → viikot, vuosi → kuukaudet,
+// oma väli: enintään 14 pv → päivät, enintään 92 pv → viikot, muuten kuukaudet),
 // kokonaissummat ja asiakkaittainen jako.
 export function summarizePeriod(entries, settings, mode, anchor) {
   const { from, to } = periodRange(mode, anchor)
   const buckets = []
-  if (mode === 'week') {
-    for (let i = 0; i < 7; i++) {
+  const span = daysBetween(from, to) + 1
+  const grain = mode === 'week' ? 'day' : mode === 'year' ? 'month'
+    : mode === 'custom' ? (span <= 14 ? 'day' : span <= 92 ? 'week' : 'month') : 'week'
+  if (grain === 'day') {
+    for (let i = 0; i < span; i++) {
       const d = addDays(from, i)
       buckets.push({ key: d, label: parseISO(d).toLocaleDateString('fi-FI', { weekday: 'short' }), sub: shortDate(d), match: e => e.work_date === d })
     }
-  } else if (mode === 'month' || mode === 'twoweek') {
+  } else if (grain === 'week') {
     for (let w = weekStart(from); w <= to; w = addDays(w, 7)) {
       const end = addDays(w, 6)
       buckets.push({ key: w, label: `Vk ${isoWeek(w).week}`, sub: `${shortDate(w < from ? from : w)}–${shortDate(end > to ? to : end)}`, anchor: w, match: e => e.work_date >= w && e.work_date <= end })
     }
   } else {
-    const y = from.slice(0, 4)
-    for (let m = 1; m <= 12; m++) {
-      const k = `${y}-${pad2(m)}`
-      buckets.push({ key: k, label: new Date(Number(y), m - 1, 15).toLocaleDateString('fi-FI', { month: 'short' }).replace('.', ''), sub: '', anchor: `${k}-15`, match: e => e.work_date.slice(0, 7) === k })
+    // Kuukaudet jakson alusta loppuun (vuosi: tammi–joulu)
+    for (let k = monthKey(from); k <= monthKey(to); k = shiftMonth(k, 1)) {
+      const [y, m] = k.split('-').map(Number)
+      const lbl = new Date(y, m - 1, 15).toLocaleDateString('fi-FI', { month: 'short' }).replace('.', '')
+      buckets.push({ key: k, label: lbl, sub: mode === 'custom' && monthKey(from).slice(0, 4) !== monthKey(to).slice(0, 4) ? String(y) : '', anchor: `${k}-15`, match: e => e.work_date.slice(0, 7) === k })
     }
   }
   const travel = dayTravel(entries)
@@ -373,7 +401,7 @@ export function summarizePeriod(entries, settings, mode, anchor) {
   }
   const byClient = [...clients.entries()].map(([name, list]) => ({ name, ...sumOf(list) }))
     .sort((a, b) => b.hours - a.hours || b.eur - a.eur)
-  return { rows, total: sumOf(entries), byClient }
+  return { rows, total: sumOf(entries), byClient, grain }
 }
 
 // Päivän kilometrien jako työmaille. legs: [{ known: km | null, weight }].
@@ -676,7 +704,7 @@ export function groupMessageText(entries) {
       out.push('', 'Materiaalit')
       for (const m of mats.values()) out.push(`${m.name}: ${fmtNum(m.qty)} ${m.unit}`)
     }
-    // Suurin tuntiryhmä "Tunnit: 9 h siivous, …", muut omina riveinään "Palokatkot: 2 h"
+    // Suurin tuntiryhmä "Tunnit: 9 h siivous, …", muut omina riveinsään "Palokatkot: 2 h"
     const hrs = [...hours.values()].sort((a, b) => b.qty - a.qty)
     if (hrs.length || list.some(e => num(e.km) > 0)) out.push('')
     hrs.forEach((h, i) => {
